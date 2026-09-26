@@ -6755,14 +6755,16 @@ async def v52_unlock_next(query):
 
 async def _v52_complete_lecture(query,context,chapter,lecture):
     uid=query.from_user.id; student=await get_student(uid)
+    progress=await lecture_progress(uid,chapter,lecture)
+    if progress and progress.get('completed_at'):
+        await query.answer('تم تسجيل هذه المحاضرة مسبقا.',show_alert=True); return
     current=await db.v52_current_preparation(uid)
     allowed=bool(current and int(current['chapter'])==int(chapter) and int(lecture) in
         set((current.get('pending_lectures') or [])+(current.get('completed_lectures') or [])))
     if not allowed:
+        allowed=await db.lecture_opened_in_assigned_preparation(uid,chapter,lecture)
+    if not allowed:
         await query.answer('هذه المحاضرة ليست ضمن محاضراتك الحالية.',show_alert=True); return
-    progress=await lecture_progress(uid,chapter,lecture)
-    if progress and progress.get('completed_at'):
-        await query.answer('تم تسجيل هذه المحاضرة مسبقا.',show_alert=True); return
     if not progress or not progress.get('opened_at'):
         await query.answer('افتح المحاضرة أولا ثم ارجع بعد مشاهدتها.',show_alert=True); return
     elapsed=(datetime.now(progress['opened_at'].tzinfo)-progress['opened_at']).total_seconds()
@@ -7591,6 +7593,30 @@ async def v55_exam_study_menu(query,chapter,lecture):
 _v55_previous_button_handler=button_handler
 async def button_handler(update,context):
     query=update.callback_query; data=query.data or ''; uid=query.from_user.id
+    if data.startswith('prepcomplete|') and not is_admin(uid):
+        try:
+            _,ch,lec=data.split('|'); chapter,lecture=int(ch),int(lec)
+        except ValueError:
+            await query.answer('رابط المحاضرة غير صالح.',show_alert=True); return
+        progress=await lecture_progress(uid,chapter,lecture)
+        if progress and progress.get('completed_at'):
+            await query.answer('هذه المحاضرة مكتملة مسبقا.',show_alert=True); return
+        if not await db.lecture_opened_in_assigned_preparation(uid,chapter,lecture):
+            await query.answer('افتح محاضرتك المستحقة أولا.',show_alert=True); return
+        elapsed=(datetime.now(progress['opened_at'].tzinfo)-progress['opened_at']).total_seconds()
+        if elapsed<MIN_LECTURE_WATCH_MINUTES*60:
+            remain=max(1,int((MIN_LECTURE_WATCH_MINUTES*60-elapsed+59)//60))
+            await query.answer(f'بقي نحو {remain} دقيقة من وقت التحقق.',show_alert=True); return
+        await query.answer(); await query.edit_message_text(bold('🔍 هل شاهدت المحاضرة كاملة وفهمت أفكارها الأساسية؟'),
+            parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton('✅ نعم، شاهدتها كاملة',callback_data=f'prepverify|{chapter}|{lecture}',style='success')],
+                [InlineKeyboardButton('↩️ العودة للمحاضرة',callback_data=f'prepopen|{chapter}|{lecture}',style='primary')]])); return
+    if data.startswith('prepverify|') and not is_admin(uid):
+        try:
+            _,ch,lec=data.split('|'); chapter,lecture=int(ch),int(lec)
+        except ValueError:
+            await query.answer('رابط المحاضرة غير صالح.',show_alert=True); return
+        await _v52_complete_lecture(query,context,chapter,lecture); return
     if data=='menu': context.user_data.pop('awaiting_exam_bank_oath',None)
     if data.startswith('v55_exam_requirements|'):
         await v55_exam_requirements(query,int(data.split('|')[1])); return

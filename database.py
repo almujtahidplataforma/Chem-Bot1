@@ -1811,6 +1811,42 @@ async def lecture_progress(user_id,chapter,lecture):
     return await run(op)
 
 
+async def lecture_opened_in_assigned_preparation(user_id,chapter,lecture):
+    """Keep an already opened lecture finishable when the next prep is published."""
+    def op():
+        with connect() as conn, conn.cursor() as cur:
+            cur.execute("""SELECT s.study_track,s.track_started_on,lp.opened_at
+                FROM chemistry_students s JOIN chemistry_lecture_progress lp ON lp.user_id=s.user_id
+                WHERE s.user_id=%s AND lp.chapter=%s AND lp.lecture=%s
+                  AND s.approved=TRUE AND s.reset_pending=FALSE;""",
+                (user_id,chapter,lecture))
+            row=cur.fetchone()
+            if not row or not row['opened_at']: return False
+            cur.execute("""SELECT EXISTS(
+                SELECT 1 FROM chemistry_early_preparation_unlocks e
+                WHERE e.user_id=%s AND e.study_track=%s AND e.chapter=%s
+                  AND %s=ANY(STRING_TO_ARRAY(e.lectures,',')::INTEGER[])
+                  AND e.unlocked_at<=%s
+                UNION ALL
+                SELECT 1 FROM chemistry_personal_preparations pp
+                WHERE %s='chapter' AND pp.user_id=%s AND pp.chapter=%s
+                  AND %s=ANY(STRING_TO_ARRAY(pp.lectures,',')::INTEGER[])
+                  AND pp.target_date<=((%s AT TIME ZONE 'Asia/Baghdad')::DATE)
+                  AND pp.target_date>=COALESCE(%s::DATE,pp.target_date)
+                UNION ALL
+                SELECT 1 FROM chemistry_preparations p
+                WHERE %s='course' AND p.chapter=%s AND p.published=TRUE
+                  AND %s=ANY(STRING_TO_ARRAY(p.lectures,',')::INTEGER[])
+                  AND p.published_at<=%s
+                  AND p.target_date>=COALESCE(%s::DATE,p.target_date)
+                ) AS allowed;""",
+                (user_id,row['study_track'],chapter,lecture,row['opened_at'],
+                 row['study_track'],user_id,chapter,lecture,row['opened_at'],row['track_started_on'],
+                 row['study_track'],chapter,lecture,row['opened_at'],row['track_started_on']))
+            return bool(cur.fetchone()['allowed'])
+    return await run(op)
+
+
 async def award_daily_preparation(user_id,chapter,lecture):
     def op():
         with connect() as conn, conn.cursor() as cur:
