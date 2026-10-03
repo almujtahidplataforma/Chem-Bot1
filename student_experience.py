@@ -86,6 +86,14 @@ class PreviewQuery:
 
 def install(ns,db):
     B=ns['InlineKeyboardButton'];K=ns['InlineKeyboardMarkup']
+    original_menu=ns['main_menu']
+    def main_menu(admin=False):
+        menu=original_menu(admin)
+        if not admin:return menu
+        rows=[list(row) for row in menu.inline_keyboard]
+        rows.insert(0,[B('👁 معاينة واجهة الطالب',callback_data='admin_preview_list|0',style='primary')])
+        return K(rows)
+    ns['main_menu']=main_menu
     def clear_cache(uid):
         cache=ns['_V51_STUDENT_CACHE'].get()
         if cache is not None:cache.pop(uid,None)
@@ -155,6 +163,20 @@ def install(ns,db):
     async def button(update,context):
         q=update.callback_query;data=str(q.data or '');uid=q.from_user.id
         admin=ns['is_admin'](uid)
+        if data.startswith('admin_preview_list|'):
+            if not admin:await q.answer('للإدارة فقط.',show_alert=True);return
+            try:page=max(0,int(data.split('|')[1]))
+            except ValueError:await q.answer('صفحة غير صالحة.');return
+            context.user_data.pop('preview_student',None)
+            students=[s for s in await db.v51_admin_students() if not ns['is_admin'](int(s['user_id']))]
+            size=10;page=min(page,max(0,(len(students)-1)//size))
+            rows=[[B(f"👁 {s.get('full_name') or s['user_id']}",callback_data=f"preview_student|{s['user_id']}",style='primary')] for s in students[page*size:(page+1)*size]]
+            nav=[]
+            if page:nav.append(B('السابق',callback_data=f'admin_preview_list|{page-1}',style='primary'))
+            if (page+1)*size<len(students):nav.append(B('التالي',callback_data=f'admin_preview_list|{page+1}',style='primary'))
+            if nav:rows.append(nav)
+            rows.append([B('لوحة الإدارة',callback_data='preview_exit',style='danger')])
+            await q.answer();await q.edit_message_text('👁 اختر الطالب لمعاينة واجهته:' if students else 'لا يوجد طلاب للمعاينة بعد.',reply_markup=K(rows));return
         if data=='preview_exit':
             if not admin:await q.answer('للإدارة فقط.',show_alert=True);return
             context.user_data.pop('preview_student',None);await q.answer()

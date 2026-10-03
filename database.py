@@ -7443,10 +7443,14 @@ async def v52_chapter_exam_bundle(user_id,chapter):
             completed={int(row['lecture']) for row in cur.fetchall()}
             cur.execute("SELECT chapter,lecture FROM chemistry_lecture_progress WHERE user_id=%s AND completed_at IS NOT NULL;",(int(user_id),))
             completed_pairs={(int(row['chapter']),int(row['lecture'])) for row in cur.fetchall()}
-            if student.get('study_track')=='chapter':
+            current_chapter=int(student.get('current_chapter') or student.get('start_chapter') or 1)
+            if student.get('study_track')=='course':
+                cur.execute('SELECT MAX(chapter) AS chapter FROM chemistry_preparations WHERE published=TRUE;')
+                current_chapter=max(current_chapter,int((cur.fetchone() or {}).get('chapter') or 1))
+            if student.get('study_track') in {'chapter','course'}:
                 from data import PLAYLISTS
                 for ch,items in PLAYLISTS.items():
-                    if int(ch)<int(student.get('current_chapter') or student.get('start_chapter') or 1):
+                    if int(ch)<current_chapter:
                         completed_pairs.update((int(ch),int(item[0])) for item in items)
                 completed.update(lec for ch,lec in completed_pairs if ch==int(chapter))
             cur.execute("""SELECT * FROM chemistry_linked_exam_definitions
