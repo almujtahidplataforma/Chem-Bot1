@@ -1,3 +1,7 @@
+# نسخة الكيمياء الجديدة: chemistry-activation-calendar-v2
+
+تفاصيل التحديث والنشر في UPDATE_V2.md، ونتائج التحقق الحالية في VALIDATION.md. وثائق الإصدارات السابقة أدناه تاريخية؛ سياسة تغيير المسار الحالية موضحة في UPDATE_V2.md.
+
 # تحديث التفعيل اليدوي وإيقاف الحساب
 
 التعليمات الجديدة في MANUAL_ACTIVATION.md. الإصدار: chemistry-manual-activation-v1.

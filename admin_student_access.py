@@ -44,6 +44,7 @@ def install(ns,db):
   else:
    if not student.get('approved'):rows.append([B('✅ تفعيل يدوي — بدون شرط ولي الأمر',callback_data=f'admin_access|activate|{student_id}',style='success')])
    rows.append([B('⛔ إيقاف حساب الطالب',callback_data=f'admin_access|block|{student_id}',style='danger')])
+  rows.append([B('👁 عرض واجهة الطالب',callback_data=f'preview_student|{student_id}',style='primary')])
   rows.append([B('◀️ إدارة الطلبة',callback_data='admin_students'),ns['back_menu']()])
   await q.edit_message_text(f"👤 {student.get('full_name') or '-'}\n🆔 {student_id}\n{status}\n👨‍👩‍👦 ولي الأمر: {'مربوط' if student.get('parent_chat_id') else 'غير مربوط'}\n⭐ XP: {student.get('xp',0)}\n⚠️ الإنذارات: {student.get('warnings',0)}",reply_markup=K(rows))
 
@@ -93,8 +94,9 @@ def install(ns,db):
   if not user or ns['is_admin'](user.id):return
   student=await db.get_student(user.id)
   if not student or not student.get('admin_blocked'):return
+  if update.callback_query and str(getattr(update.callback_query,'data','') or '') in {'self_delete','self_delete_confirm'}:return
   if update.callback_query:await update.callback_query.answer('⛔ حسابك موقوف بقرار الإدارة.',show_alert=True)
   elif update.effective_message and update.effective_chat.type=='private':
-   await update.effective_message.reply_text('⛔ حسابك موقوف بقرار الإدارة. راجع الأستاذ.')
+   await update.effective_message.reply_text('⛔ حسابك موقوف بقرار الإدارة. راجع الأستاذ.',reply_markup=K([[B('🗑 حذف حسابي',callback_data='self_delete',style='danger')]]))
   raise ns['ApplicationHandlerStop']
  ns['admin_access_guard']=access_guard

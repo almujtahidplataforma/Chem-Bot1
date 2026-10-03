@@ -99,7 +99,7 @@ _OWNER_ERROR_ALERT_AT=0.0
 
 REG_NAME, REG_SCHOOL, REG_GRADE, REG_JOIN = range(4)
 DIV = "━━━━━━━━━━━━━━━━━━"
-BUILD_VERSION = "chemistry-manual-activation-v1"
+BUILD_VERSION = "chemistry-activation-calendar-v2"
 NEON_ECO_MODE=_env_bool("NEON_ECO_MODE",True)
 NEON_ECO_INTERVAL_SECONDS=max(900,_env_int("NEON_ECO_INTERVAL_SECONDS",1800))
 NEON_BACKGROUND_INTERVAL_SECONDS=max(3600,_env_int("NEON_BACKGROUND_INTERVAL_SECONDS",21600))
@@ -220,7 +220,7 @@ def parent_menu(students):
             [InlineKeyboardButton("🏅 إنجازات هذا الأسبوع",callback_data=f"parentachievements|{sid}"),InlineKeyboardButton("⚠️ الإنذارات",callback_data=f"parentwarnings|{sid}")],
             [InlineKeyboardButton("🏖 طلب إجازة للطالب",callback_data=f"parentleave|{sid}")],
         ])
-    rows.append([InlineKeyboardButton('🗑 حذف حساب ولي الأمر',callback_data='parent_delete',style='danger')])
+    rows.append([InlineKeyboardButton('🗑 حذف حسابي',callback_data='parent_delete',style='danger')])
     return InlineKeyboardMarkup(rows)
 
 
@@ -275,7 +275,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if pending_parent_students and not existing:
         context.user_data.pop("registration",None)
         names="، ".join(s["full_name"] for s in pending_parent_students)
-        await update.effective_message.reply_text(bold(f"⏳ طلب حساب ولي الأمر قيد المراجعة.\nالطالب: {names}\nستعمل الواجهة فور ضغط الإدارة زر «تفعيل الحساب»."),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🗑 حذف حساب ولي الأمر",callback_data="parent_delete",style="danger")]]))
+        await update.effective_message.reply_text(bold(f"⏳ طلب حساب ولي الأمر قيد المراجعة.\nالطالب: {names}\nستعمل الواجهة فور ضغط الإدارة زر «تفعيل الحساب»."),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🗑 حذف حسابي",callback_data="parent_delete",style="danger")]]))
         return ConversationHandler.END
     if not await is_group_member(context.bot,user.id):
         kb=InlineKeyboardMarkup([[InlineKeyboardButton("✅ نعم، أرغب بالتسجيل",callback_data="guest_enroll")],[InlineKeyboardButton("📚 لا، فتح المكتبة العامة",callback_data="guest_continue")]])
@@ -6095,6 +6095,7 @@ async def v51_account_settings(query):
         [_v51_neutral_button(f'📚 عدد التحاضير يومياً: {goal}',callback_data='v51_review_goal')],
         [_v51_neutral_button('🔄 تغيير فصل البداية أو المسار',callback_data='change_study_track')],
         [_v51_neutral_button('🗓 جدولي الدراسي',callback_data='personal_schedule')],
+        [InlineKeyboardButton('🗑 حذف حسابي',callback_data='self_delete',style='danger')],
         [InlineKeyboardButton('🗑 إعادة تعيين معلوماتي بالكامل',callback_data='v47_reset',style='danger')],
         [back_menu()]])
     await query.edit_message_text(bold(f'⚙️ إعدادات الحساب\n{DIV}\nمعلوماتك، نظام دراستك، وربط ولي الأمر.'),parse_mode=ParseMode.HTML,reply_markup=kb)
@@ -6623,16 +6624,16 @@ async def v52_exam_chapter(query,chapter):
     completed=set(bundle.get('completed') or set()); exams=bundle.get('exams') or []
     lecture_ids=[int(item[0]) for item in PLAYLISTS.get(int(chapter),[])]
     rows=[]
-    for start in range(0,len(lecture_ids),2):
+    for start in range(0,len(lecture_ids),4):
         line=[]
-        for lecture in lecture_ids[start:start+2]:
+        for lecture in lecture_ids[start:start+4]:
             count=sum((int(chapter),lecture) in set(map(tuple,exam.get('required') or [])) for exam in exams)
             ready=lecture in completed
             mark='✅' if ready else '🔒'
             suffix=f' • {count} امتحان' if count else ''
             callback=(f'v52_exam_lecture|{chapter}|{lecture}' if ready
                       else f'v55_exam_study|{chapter}|{lecture}')
-            line.append(InlineKeyboardButton(f'{mark} المحاضرة {lecture}{suffix}',callback_data=callback,
+            line.append(InlineKeyboardButton(f'{mark} {lecture}',callback_data=callback,
                 style='success' if ready and count else 'primary'))
         rows.append(line)
     rows += [[InlineKeyboardButton('◀️ الفصول',callback_data='v42_exam_bank',style='primary'),back_menu()]]
@@ -6654,7 +6655,7 @@ async def v52_exam_lecture(query,chapter,lecture):
     rows=[]
     for exam in exams:
         task=exam.get('task') or {}; required=exam.get('required') or []
-        lectures=' + '.join(f'م{number}' for ch,number in required if int(ch)==int(chapter))
+        lectures='+'.join(str(number) for ch,number in sorted(required) if int(ch)==int(chapter))
         if task.get('submitted_at'):
             mark='✅'; state='تم التسليم'; callback='v52_exam_submitted'
         elif not exam.get('ready'):
@@ -7799,6 +7800,9 @@ _install_school_exam_upgrade(globals(),db,'chemistry')
 
 from admin_student_access import install as _install_admin_student_access
 _install_admin_student_access(globals(),db)
+
+from student_experience import install as _install_student_experience
+_install_student_experience(globals(),db)
 
 if __name__ == "__main__":
     main()

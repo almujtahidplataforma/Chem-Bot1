@@ -332,7 +332,8 @@ def init_db():
         ALTER TABLE chemistry_students ADD COLUMN IF NOT EXISTS track_started_on DATE;
         ALTER TABLE chemistry_students ADD COLUMN IF NOT EXISTS schedule_mode TEXT NOT NULL DEFAULT 'regular';
         ALTER TABLE chemistry_students ADD COLUMN IF NOT EXISTS study_days INTEGER[] NOT NULL DEFAULT ARRAY[1,3,6];
-        ALTER TABLE chemistry_students ADD COLUMN IF NOT EXISTS admin_manual_active BOOLEAN NOT NULL DEFAULT FALSE;
+        ALTER TABLE chemistry_students ADD COLUMN IF NOT EXISTS activation_requested_at TIMESTAMPTZ,
+            ADD COLUMN IF NOT EXISTS admin_manual_active BOOLEAN NOT NULL DEFAULT FALSE;
         ALTER TABLE chemistry_students ADD COLUMN IF NOT EXISTS admin_blocked BOOLEAN NOT NULL DEFAULT FALSE;
         ALTER TABLE chemistry_students ADD COLUMN IF NOT EXISTS admin_access_previous_approval BOOLEAN NOT NULL DEFAULT FALSE;
         ALTER TABLE chemistry_students ADD COLUMN IF NOT EXISTS schedule_change_count INTEGER NOT NULL DEFAULT 0;
@@ -2691,11 +2692,12 @@ async def v42_repair_chapter_schedules():
     """Repair finish dates previously calculated with one weekday count for all chapters."""
     def students_op():
         with connect() as conn, conn.cursor() as cur:
-            cur.execute("SELECT user_id,current_chapter,study_days FROM chemistry_students WHERE approved=TRUE AND study_track='chapter';"); return cur.fetchall()
+            cur.execute("SELECT user_id,current_chapter,study_days,schedule_mode FROM chemistry_students WHERE approved=TRUE AND study_track='chapter';"); return cur.fetchall()
     repaired=0
     for student in await run(students_op):
         chapter=int(student.get("current_chapter") or 1); required=5 if chapter==1 else 4 if chapter==2 else 3
         selected=sorted({int(x) for x in (student.get("study_days") or []) if 0<=int(x)<=6})
+        if student.get("schedule_mode")=="custom" and selected: continue
         if len(selected)!=required: selected=sorted({6,0,1,2,3} if chapter==1 else ({6,0,1,3} if chapter==2 else {6,1,3}))
         result=await v41_set_study_days(student["user_id"],selected,True)
         repaired+=1 if result.get("status")=="ok" else 0
@@ -4567,17 +4569,18 @@ async def v37_admin_decide_track_change(request_id,approve,admin_id):
     return await run(op)
 
 
-async def v41_set_study_days(user_id,days):
-    """Chapter students may replace weekdays only; the required count is fixed by the chapter."""
+async def v60_set_study_days(user_id,days,_repair=False):
+    """Chapter students choose 1–7 weekdays; reschedule only unfinished preparations."""
     days=sorted({int(day) for day in days})
     def op():
         with connect() as conn, conn.cursor() as cur:
             cur.execute("SELECT * FROM chemistry_students WHERE user_id=%s FOR UPDATE;",(user_id,)); student=cur.fetchone()
             if not student: return {"status":"missing"}
             if student.get("study_track")!="chapter": return {"status":"course"}
+            if not student.get("approved") or student.get("reset_pending"): return {"status":"inactive"}
             chapter=int(student.get("current_chapter") or 1)
-            required=5 if chapter==1 else 4 if chapter==2 else 3
-            if len(days)!=required or any(day<0 or day>6 for day in days):
+            required=len(days)
+            if not 1<=len(days)<=7 or any(day<0 or day>6 for day in days):
                 return {"status":"count","required":required}
             cur.execute("""SELECT * FROM chemistry_personal_preparations
                 WHERE user_id=%s ORDER BY chapter,prep_no,target_date,id FOR UPDATE;""",(user_id,)); rows=cur.fetchall()
@@ -4595,7 +4598,7 @@ async def v41_set_study_days(user_id,days):
                 cur.execute("""UPDATE chemistry_personal_preparations
                     SET target_date=target_date+10000 WHERE id=ANY(%s);""",(pending_ids,))
                 from datetime import date
-                cursor=date.today()-timedelta(days=1)
+                cursor=datetime.now(ZoneInfo("Asia/Baghdad")).date()-timedelta(days=1)
                 for row in pending:
                     while True:
                         cursor += timedelta(days=1)
@@ -7440,6 +7443,12 @@ async def v52_chapter_exam_bundle(user_id,chapter):
             completed={int(row['lecture']) for row in cur.fetchall()}
             cur.execute("SELECT chapter,lecture FROM chemistry_lecture_progress WHERE user_id=%s AND completed_at IS NOT NULL;",(int(user_id),))
             completed_pairs={(int(row['chapter']),int(row['lecture'])) for row in cur.fetchall()}
+            if student.get('study_track')=='chapter':
+                from data import PLAYLISTS
+                for ch,items in PLAYLISTS.items():
+                    if int(ch)<int(student.get('current_chapter') or student.get('start_chapter') or 1):
+                        completed_pairs.update((int(ch),int(item[0])) for item in items)
+                completed.update(lec for ch,lec in completed_pairs if ch==int(chapter))
             cur.execute("""SELECT * FROM chemistry_linked_exam_definitions
                 WHERE chapter=%s AND deleted_at IS NULL ORDER BY created_at,id;""",(int(chapter),))
             exams=[]
@@ -7853,3 +7862,6 @@ def init_db():
                          bool(replacement),student_id))
             cur.execute("DELETE FROM chemistry_communication_routes WHERE chat_id=%s AND role='parent';",(parent_id,))
         conn.commit()
+
+# Keep the user-selected calendar active after all legacy aliases.
+v41_set_study_days=v60_set_study_days
