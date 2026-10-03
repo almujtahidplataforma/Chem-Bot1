@@ -85,8 +85,8 @@ OWNER_USERNAME = os.getenv("OWNER_USERNAME", "").lstrip("@")
 GROUP_INVITE_URL = os.getenv("GROUP_INVITE_URL", "")
 REQUIRED_CHANNEL = os.getenv("REQUIRED_CHANNEL", "@almujtahid_platform")
 REQUIRED_CHANNEL_URL = os.getenv("REQUIRED_CHANNEL_URL", "https://t.me/almujtahid_platform")
-ADMIN_IDS = {int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip().isdigit()}
-FOUNDER_IDS = {int(x) for x in os.getenv("FOUNDER_IDS", "").split(",") if x.strip().isdigit()}
+ADMIN_IDS = {int(x.strip()) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip().isdigit()}
+FOUNDER_IDS = {int(x.strip()) for x in os.getenv("FOUNDER_IDS", "").split(",") if x.strip().isdigit()}
 DEFAULT_HOMEWORK_HOURS = _env_int("DEFAULT_HOMEWORK_HOURS",24)
 DEFAULT_EXAM_HOURS = 24
 MAX_WARNINGS = 5
@@ -99,7 +99,7 @@ _OWNER_ERROR_ALERT_AT=0.0
 
 REG_NAME, REG_SCHOOL, REG_GRADE, REG_JOIN = range(4)
 DIV = "━━━━━━━━━━━━━━━━━━"
-BUILD_VERSION = "v58.0-parent-roles"
+BUILD_VERSION = "chemistry-manual-activation-v1"
 NEON_ECO_MODE=_env_bool("NEON_ECO_MODE",True)
 NEON_ECO_INTERVAL_SECONDS=max(900,_env_int("NEON_ECO_INTERVAL_SECONDS",1800))
 NEON_BACKGROUND_INTERVAL_SECONDS=max(3600,_env_int("NEON_BACKGROUND_INTERVAL_SECONDS",21600))
@@ -205,7 +205,7 @@ def main_menu(admin=False):
 
 
 def parent_copy_markup(code, with_back=False):
-    rows=[[InlineKeyboardButton('📋 نسخ /parent والرمز كاملاً',
+    rows=[[InlineKeyboardButton('📋 نسخ كود ولي الأمر',
             copy_text=CopyTextButton(text=f'/parent {code}'),style='primary')]]
     if with_back: rows.append([back_menu()])
     return InlineKeyboardMarkup(rows)
@@ -597,7 +597,7 @@ async def receive_submission(update: Update, context: ContextTypes.DEFAULT_TYPE)
     task_id=context.user_data.get("waiting_submission")
     if not task_id: return False
     student=await get_student(update.effective_user.id)
-    if not student or not student["approved"] or not student.get("parent_chat_id") or not await is_channel_member(context.bot,update.effective_user.id):
+    if not student or not student["approved"] or (not student.get("parent_chat_id") and not student.get("admin_manual_active")) or (not student.get("admin_manual_active") and not await is_channel_member(context.bot,update.effective_user.id)):
         context.user_data.pop("waiting_submission",None); await update.effective_message.reply_text(bold("🔒 لا يمكنك التسليم: يجب تفعيل الحساب وربط ولي الأمر والاشتراك بالقناة."),parse_mode=ParseMode.HTML); return True
     task=await get_task(task_id)
     effective=await effective_task_deadline(task_id,update.effective_user.id) if task else None
@@ -1775,11 +1775,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer("تم رفض الطلب"); await query.edit_message_text((query.message.text_html or bold("طلب التفعيل"))+bold("\n\n❌ تم رفض الطلب."),parse_mode=ParseMode.HTML); return
     admin=is_admin(uid); student=None if admin else await get_student(uid)
     public=(data in {"menu","today_prep","playlists","study_resources","past_exams"} or data.startswith(("prepopen|","chapter|","lecture|","archivechapter|","archivelecture|","archiveexam|","resourcecategory|booklet","resourcecategory|summary","resourcecategory|ministerial","resourcechapter|booklet","resourcechapter|summary","resourcechapter|ministerial","resourceitem|")))
-    if not admin and student and student["approved"] and not student.get("parent_chat_id") and not public:
+    if not admin and student and student["approved"] and not student.get("parent_chat_id") and not student.get("admin_manual_active") and not public:
         await query.answer("يجب ربط ولي الأمر أولاً لفتح خدمات الدورة.",show_alert=True); return
     if not admin and (not student or not student["approved"]) and not public:
         await query.answer("هذه الخدمة مخصصة لطلاب الدورة المفعّلين.",show_alert=True); return
-    if not admin and student and student["approved"] and not await is_channel_member(context.bot,uid):
+    if not admin and student and student["approved"] and not student.get("admin_manual_active") and not await is_channel_member(context.bot,uid):
         kb=InlineKeyboardMarkup([[InlineKeyboardButton("📢 الاشتراك بالقناة",url=REQUIRED_CHANNEL_URL)]])
         await query.answer(); await query.edit_message_text(bold("🔒 تم قفل خدمات البوت لأنك غير مشترك بقناة منصة المجتهد."),parse_mode=ParseMode.HTML,reply_markup=kb); return
     await query.answer()
@@ -2812,8 +2812,11 @@ def main():
         fallbacks=[CommandHandler("start",start),CommandHandler("parent",parent_during_registration),CommandHandler("cancel",cancel_registration)],allow_reentry=True,conversation_timeout=1800,
     )
     app.add_handler(MessageHandler(filters.ChatType.PRIVATE,spam_guard),group=-1)
+    app.add_handler(CallbackQueryHandler(spam_guard),group=-1)
     app.add_handler(ChatMemberHandler(track_chat_member,ChatMemberHandler.CHAT_MEMBER),group=-2)
     app.add_handler(MessageHandler(filters.ChatType.GROUPS,observe_group_activity),group=-2)
+    app.add_handler(MessageHandler(filters.ALL,admin_access_guard),group=-3)
+    app.add_handler(CallbackQueryHandler(admin_access_guard),group=-3)
     app.add_handler(registration,group=0)
     app.add_handler(CommandHandler("menu",menu_command),group=0)
     app.add_handler(CommandHandler("cancel",cancel_registration),group=0)
@@ -5304,7 +5307,7 @@ async def show_task(query,context,task_id):
     task=await get_task(task_id)
     if not is_admin(query.from_user.id):
         student=await get_student(query.from_user.id)
-        if not student or not student.get('approved') or student.get('reset_pending') or not student.get('parent_chat_id'):
+        if not student or not student.get('approved') or student.get('reset_pending') or (not student.get('parent_chat_id') and not student.get('admin_manual_active')):
             await query.answer('هذه الخدمة تحتاج حساباً مفعلاً وربط ولي الأمر.',show_alert=True);return
         if not await is_channel_member(context.bot,query.from_user.id):
             await query.answer('اشترك بالقناة المطلوبة أولاً.',show_alert=True);return
@@ -5510,7 +5513,7 @@ async def receive_submission(update: Update,context: ContextTypes.DEFAULT_TYPE):
     task_id=context.user_data.get('waiting_submission')
     if not task_id: return False
     student=await get_student(update.effective_user.id)
-    if not student or not student.get('approved') or not student.get('parent_chat_id') or not await is_channel_member(context.bot,update.effective_user.id):
+    if not student or not student.get('approved') or (not student.get('parent_chat_id') and not student.get('admin_manual_active')) or (not student.get('admin_manual_active') and not await is_channel_member(context.bot,update.effective_user.id)):
         context.user_data.pop('waiting_submission',None)
         await update.effective_message.reply_text(bold('🔒 لا يمكنك التسليم: يجب تفعيل الحساب وربط ولي الامر والاشتراك بالقناة.'),parse_mode=ParseMode.HTML); return True
     task=await get_task(task_id); effective=await effective_task_deadline(task_id,update.effective_user.id) if task else None
@@ -6286,7 +6289,7 @@ async def v51_backlog_menu(query):
 async def v51_admin_students_menu(query):
     rows=await db.v51_admin_students(); active=[r for r in rows if r.get('approved')]
     course=[r for r in active if r.get('study_track')=='course']; chapter=[r for r in active if r.get('study_track')=='chapter']
-    pending=[r for r in rows if not r.get('approved')]; warnings=[r for r in rows if int(r.get('warnings') or 0)>0]
+    pending=[r for r in rows if not r.get('approved') and not r.get('admin_blocked')]; warnings=[r for r in rows if int(r.get('warnings') or 0)>0]
     no_parent=[r for r in rows if not r.get('parent_chat_id')]
     text=(f'👥 إدارة الطلبة\n{DIV}\n📊 جميع الطلبة: {len(rows)}\n✅ مفعلون: {len(active)}\n'
           f'👥 الدورة الحالية: {len(course)}\n📚 الفصول المستقلة: {len(chapter)}\n'
@@ -6298,6 +6301,7 @@ async def v51_admin_students_menu(query):
         [_v51_neutral_button('⚠️ لديهم إنذارات',callback_data='v51_students|warnings|0'),
          _v51_neutral_button('👨‍👩‍👦 بلا ولي أمر',callback_data='v51_students|no_parent|0')],
         [InlineKeyboardButton('📋 جميع الطلبة',callback_data='v51_students|all|0',style='primary')],
+        [InlineKeyboardButton('⛔ حسابات موقوفة',callback_data='v51_students|blocked|0',style='danger')],
         [_v51_neutral_button('⚠️ مركز الإنذارات',callback_data='v43_warnings'),back_menu()]])
     await query.edit_message_text(bold(text),parse_mode=ParseMode.HTML,reply_markup=kb)
 
@@ -6306,14 +6310,15 @@ async def v51_admin_students_page(query,filter_name,page):
     rows=await db.v51_admin_students()
     filters={
         'active':lambda row: bool(row.get('approved')),
-        'pending':lambda row:not row.get('approved'),
+        'pending':lambda row:not row.get('approved') and not row.get('admin_blocked'),
+        'blocked':lambda row:bool(row.get('admin_blocked')),
         'warnings':lambda row:int(row.get('warnings') or 0)>0,
         'no_parent':lambda row:not row.get('parent_chat_id'),
         'all':lambda row:True,
     }
     chosen=[row for row in rows if filters.get(filter_name,filters['all'])(row)]
     size=6; pages=max(1,(len(chosen)+size-1)//size); page=max(0,min(int(page),pages-1))
-    labels={'active':'المفعلون','pending':'بانتظار التفعيل','warnings':'لديهم إنذارات','no_parent':'بلا ولي أمر','all':'جميع الطلبة'}
+    labels={'active':'المفعلون','pending':'بانتظار التفعيل','blocked':'حسابات موقوفة','warnings':'لديهم إنذارات','no_parent':'بلا ولي أمر','all':'جميع الطلبة'}
     lines=[f"👥 {labels.get(filter_name,'جميع الطلبة')}",DIV,f'الصفحة {page+1}/{pages} | العدد {len(chosen)}','']
     for row in chosen[page*size:(page+1)*size]:
         track='الدورة' if row.get('study_track')=='course' else f"فصل {row.get('current_chapter') or '-'}"
@@ -6324,7 +6329,7 @@ async def v51_admin_students_page(query,filter_name,page):
     nav=[]
     if page>0: nav.append(_v51_neutral_button('◀️ السابق',callback_data=f'v51_students|{filter_name}|{page-1}'))
     if page+1<pages: nav.append(_v51_neutral_button('التالي ▶️',callback_data=f'v51_students|{filter_name}|{page+1}'))
-    kb=[]
+    kb=[[InlineKeyboardButton(f"⚙️ {row['full_name']} ({row['user_id']})",callback_data=f"admin_student|{row['user_id']}",style='primary')] for row in chosen[page*size:(page+1)*size]]
     if nav: kb.append(nav)
     kb += [[_v51_neutral_button('◀️ إدارة الطلبة',callback_data='admin_students'),back_menu()]]
     await query.edit_message_text(bold('\n\n'.join(lines)),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup(kb))
@@ -6332,7 +6337,7 @@ async def v51_admin_students_page(query,filter_name,page):
 
 async def v51_admin_parents_menu(query):
     rows=await db.v51_admin_parents(); active=[r for r in rows if r.get('approved')]
-    pending=[r for r in rows if not r.get('approved')]
+    pending=[r for r in rows if not r.get('approved') and not r.get('admin_blocked')]
     unique=len({int(r['parent_chat_id']) for r in rows})
     text=(f'👪 إدارة أولياء الأمور\n{DIV}\n👤 الحسابات الفريدة: {unique}\n'
           f'🔗 روابط الطلاب: {len(rows)}\n✅ مفعلة: {len(active)}\n⏳ بانتظار التفعيل: {len(pending)}')
@@ -6672,7 +6677,7 @@ async def v52_exam_lecture(query,chapter,lecture):
 
 async def v52_open_exam(query,context,definition_id):
     student=await get_student(query.from_user.id)
-    if not student or not student.get('parent_chat_id'):
+    if not student or (not student.get('parent_chat_id') and not student.get('admin_manual_active')):
         await query.answer('يجب ربط ولي الأمر أولا.',show_alert=True); return
     result=await db.v52_prepare_chapter_exam(definition_id,query.from_user.id)
     if result.get('status')=='locked':
@@ -6684,20 +6689,24 @@ async def v52_open_exam(query,context,definition_id):
         await query.answer('تم تسليم هذا الامتحان مسبقا.',show_alert=True); return
     if result.get('status')=='open':
         await query.answer(); await show_task(query,context,task['id']); return
+    destination=student.get('parent_chat_id') or OWNER_CHAT_ID or next(iter(sorted(ADMIN_IDS)),0)
+    if not destination:
+        await query.answer('لم تضبط وجهة موافقات الإدارة. راجع الأستاذ.',show_alert=True); return
+    approver='ولي الأمر' if student.get('parent_chat_id') else 'الإدارة'
     await request_exam_access(task['id'],query.from_user.id)
     if result.get('notify'):
         kb=InlineKeyboardMarkup([[
             InlineKeyboardButton('✅ موافق، فتح الامتحان',callback_data=f"examallow|{task['id']}|{query.from_user.id}",style='success'),
             InlineKeyboardButton('❌ رفض',callback_data=f"examdeny|{task['id']}|{query.from_user.id}",style='danger')]])
         try:
-            await context.bot.send_message(student['parent_chat_id'],bold(
+            await context.bot.send_message(destination,bold(
                 f"📝 طلب فتح امتحان\n{DIV}\n👤 الطالب: {student['full_name']}\n📌 {task['title']}\n\n"
                 'لا يفتح الامتحان إلا بعد موافقتكم.'),parse_mode=ParseMode.HTML,reply_markup=kb)
         except TelegramError:
-            await query.answer('تعذر إرسال الطلب إلى ولي الأمر. اطلب منه فتح البوت ثم حاول مجددا.',show_alert=True); return
-    await query.answer('أرسل طلب الموافقة إلى ولي الأمر.',show_alert=True)
+            await query.answer(f'تعذر إرسال الطلب إلى {approver}. راجع الأستاذ.',show_alert=True); return
+    await query.answer(f'أرسل طلب الموافقة إلى {approver}.',show_alert=True)
     await query.edit_message_text(bold(
-        f"⏳ بانتظار موافقة ولي الأمر\n{DIV}\n📝 {task['title']}\n\n"
+        f"⏳ بانتظار موافقة {approver}\n{DIV}\n📝 {task['title']}\n\n"
         'بعد الموافقة ارجع إلى المحاضرة واضغط الامتحان مرة أخرى.'),
         parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup([[back_menu()]]))
 
@@ -7304,7 +7313,7 @@ async def v54_school_review_detail(query,review_id):
     rows=[]
     if review.get('completed_at'):
         rows.append([InlineKeyboardButton('✅ تم إكمال المراجعة',callback_data='v54_school_done',style='success')])
-    elif review['publish_date']<=today<=review['exam_date']:
+    elif review['publish_date']<=today:
         rows.append([InlineKeyboardButton('✅ أكملت المراجعة',callback_data=f"v54_school_complete|{review['id']}",style='success')])
     else:
         rows.append([InlineKeyboardButton('⏳ انتهت مدة هذه المراجعة',callback_data='v54_school_done',style='primary')])
@@ -7327,10 +7336,12 @@ async def v54_school_review_exams(query):
             mark,state,callback='✅','تم التسليم','v54_school_done'
         elif not review.get('completed_at'):
             mark,state,callback='🔒','أكمل المراجعة أولا',f"v54_school_review_open|{review['id']}"
-        elif review['exam_date']>today:
-            mark,state,callback='⏳',review['exam_date'].strftime('%d/%m/%Y'),'v54_school_done'
+        elif (review.get('exam_opens_at') and review['exam_opens_at']>datetime.now(TIMEZONE)) or (not review.get('exam_opens_at') and review['exam_date']>today):
+            mark,state,callback='⏳',(review.get('exam_opens_at') or review['exam_date']).strftime('%d/%m/%Y'),'v54_school_done'
         elif not int(review.get('media_count') or 0):
             mark,state,callback='📭','بانتظار أسئلة الأستاذ','v54_school_done'
+        elif review.get('task_id') and (review.get('closed') or (review.get('deadline') and review['deadline']<=datetime.now(TIMEZONE))):
+            mark,state,callback='⏰','طلب دخول بعد انتهاء الوقت',f"v54_school_exam_open|{review['id']}"
         elif review.get('task_id') and not review.get('exam_pending_activation'):
             mark,state,callback='🟢','مفتوح',f"v54_school_exam_open|{review['id']}"
         else:
@@ -7492,7 +7503,10 @@ async def button_handler(update,context):
         context.user_data['awaiting_school_review_oath']={'review_id':review_id,'started_at':datetime.now(TIMEZONE)}
         await query.answer(); await query.edit_message_text(bold(
             f"🤝 قسم إكمال مراجعة المدرسة\n{DIV}\nأرسل النص التالي حرفيا برسالة واحدة:\n\n{SCHOOL_REVIEW_OATH}"),
-            parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup([[back_menu()]])); return
+            parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton('📋 نسخ قسم مراجعة المدرسة',
+                    copy_text=CopyTextButton(text=SCHOOL_REVIEW_OATH),style='primary')],
+                [back_menu()]])); return
     if data=='v54_school_exams':
         await v54_school_review_exams(query); return
     if data.startswith('v54_school_exam_open|'):
@@ -7779,6 +7793,12 @@ async def private_messages(update,context):
                 InlineKeyboardButton('📝 فتح امتحانات المحاضرة',callback_data=f'v52_exam_lecture|{chapter}|{lecture}',style='success')],[back_menu()]])); return
     return await _v55_previous_private_messages(update,context)
 
+
+from school_exam_upgrade import install as _install_school_exam_upgrade
+_install_school_exam_upgrade(globals(),db,'chemistry')
+
+from admin_student_access import install as _install_admin_student_access
+_install_admin_student_access(globals(),db)
 
 if __name__ == "__main__":
     main()

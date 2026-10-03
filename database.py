@@ -1,3 +1,5 @@
+from datetime import datetime, time
+from zoneinfo import ZoneInfo
 import asyncio
 import os
 import threading
@@ -330,6 +332,9 @@ def init_db():
         ALTER TABLE chemistry_students ADD COLUMN IF NOT EXISTS track_started_on DATE;
         ALTER TABLE chemistry_students ADD COLUMN IF NOT EXISTS schedule_mode TEXT NOT NULL DEFAULT 'regular';
         ALTER TABLE chemistry_students ADD COLUMN IF NOT EXISTS study_days INTEGER[] NOT NULL DEFAULT ARRAY[1,3,6];
+        ALTER TABLE chemistry_students ADD COLUMN IF NOT EXISTS admin_manual_active BOOLEAN NOT NULL DEFAULT FALSE;
+        ALTER TABLE chemistry_students ADD COLUMN IF NOT EXISTS admin_blocked BOOLEAN NOT NULL DEFAULT FALSE;
+        ALTER TABLE chemistry_students ADD COLUMN IF NOT EXISTS admin_access_previous_approval BOOLEAN NOT NULL DEFAULT FALSE;
         ALTER TABLE chemistry_students ADD COLUMN IF NOT EXISTS schedule_change_count INTEGER NOT NULL DEFAULT 0;
         ALTER TABLE chemistry_personal_preparations ADD COLUMN IF NOT EXISTS prep_no INTEGER;
         ALTER TABLE chemistry_scheduled_tasks ADD COLUMN IF NOT EXISTS linked_chapter INTEGER;
@@ -478,7 +483,7 @@ async def register_student(user_id, username, full_name, school, target_grade):
 async def set_student_approval(user_id, approved):
     def op():
         with connect() as conn, conn.cursor() as cur:
-            cur.execute("UPDATE chemistry_students SET approved=%s,last_seen=CURRENT_TIMESTAMP WHERE user_id=%s RETURNING *;",(approved,user_id)); row=cur.fetchone(); conn.commit(); return row
+            cur.execute("UPDATE chemistry_students SET approved=CASE WHEN admin_blocked THEN FALSE ELSE %s END,last_seen=CURRENT_TIMESTAMP WHERE user_id=%s RETURNING *;",(approved,user_id)); row=cur.fetchone(); conn.commit(); return row
     return await run(op)
 
 
@@ -701,9 +706,17 @@ async def activate_exam(task_id,user_id,approved_by,hours=None):
             if not current: return None
             effective_hours=max(1,int(hours or current.get('exam_duration_hours') or 24))
             now=datetime_now(cur);deadline=now+timedelta(hours=effective_hours)
+            available=now
+            if current.get('school_review_id'):
+                cur.execute('SELECT * FROM chemistry_school_reviews WHERE id=%s FOR UPDATE;',(current['school_review_id'],))
+                review=cur.fetchone()
+                if not review or review.get('exam_deleted') or review.get('exam_manual_closed'): return None
+                available=review.get('exam_opens_at') or current.get('exam_available_at') or now
+                deadline=review.get('exam_closes_at') or current['deadline']
+                if available>now or deadline<=now: return None
             cur.execute("""UPDATE chemistry_tasks SET exam_pending_activation=FALSE,deadline=%s,closed=FALSE,
                 exam_available_at=%s,published_at=COALESCE(published_at,%s)
-                WHERE id=%s RETURNING *;""",(deadline,now,now,task_id));task=cur.fetchone()
+                WHERE id=%s RETURNING *;""",(deadline,available,now,task_id));task=cur.fetchone()
             cur.execute("UPDATE chemistry_exam_access SET status='approved',approved_by=%s,approved_at=CURRENT_TIMESTAMP WHERE task_id=%s AND user_id=%s;",(approved_by,task_id,user_id))
             conn.commit();return task
     return await run(op)
@@ -2569,7 +2582,7 @@ async def v28_ready_personal_exams():
         with connect() as conn, conn.cursor() as cur:
             cur.execute("""SELECT d.id definition_id,s.user_id FROM chemistry_linked_exam_definitions d JOIN chemistry_students s ON
             s.approved=TRUE AND d.target_scope='chapter' AND s.study_track='chapter' AND s.current_chapter=d.chapter
-            WHERE NOT EXISTS(SELECT 1 FROM chemistry_tasks t WHERE t.exam_definition_id=d.id AND t.target_scope='student:'||s.user_id);""")
+            WHERE NOT EXISTS(SELECT 1 FROM chemistry_tasks t WHERE t.exam_definition_id=d.id AND t.target_scope='student:'||s.user_id::text);""")
             candidates=cur.fetchall(); ready=[]
             for c in candidates:
                 cur.execute("SELECT chapter,lecture FROM chemistry_linked_exam_lectures WHERE definition_id=%s ORDER BY position;",(c['definition_id'],)); lectures=cur.fetchall()
@@ -2951,7 +2964,7 @@ async def v54_school_review_catalog(user_id=None):
         with connect() as conn,conn.cursor() as cur:
             params=[]; join=''; columns=''
             if user_id is not None:
-                columns=",p.completed_at,p.xp_awarded,p.task_id,t.exam_pending_activation,t.deadline,t.closed,sub.submitted_at,access.status AS approval_status"
+                columns=",p.completed_at,p.xp_awarded,p.task_id,t.exam_pending_activation,GREATEST(t.deadline,COALESCE((SELECT e.extended_until FROM chemistry_task_extensions e WHERE e.task_id=t.id AND e.user_id=p.user_id),t.deadline)) AS deadline,t.closed,sub.submitted_at,access.status AS approval_status"
                 join="""LEFT JOIN chemistry_school_review_progress p ON p.review_id=r.id AND p.user_id=%s
                     LEFT JOIN chemistry_tasks t ON t.id=p.task_id
                     LEFT JOIN chemistry_submissions sub ON sub.task_id=t.id AND sub.user_id=%s
@@ -2986,6 +2999,7 @@ async def v54_replace_school_review_exam_media(review_id,items,created_by):
             cur.execute("SELECT id FROM chemistry_school_reviews WHERE id=%s AND active=TRUE FOR UPDATE;",(int(review_id),))
             if not cur.fetchone(): return 0
             cur.execute("DELETE FROM chemistry_school_review_exam_media WHERE review_id=%s;",(int(review_id),))
+            cur.execute('UPDATE chemistry_school_reviews SET exam_deleted=FALSE WHERE id=%s;',(int(review_id),))
             for position,(payload,file_id,content) in enumerate(clean):
                 cur.execute("""INSERT INTO chemistry_school_review_exam_media
                     (review_id,payload_type,file_id,text_content,position,created_by)
@@ -3028,10 +3042,11 @@ def _v54_ensure_school_review_task(cur,review_id,user_id):
         JOIN chemistry_school_review_progress p ON p.review_id=r.id AND p.user_id=e.user_id
             AND p.completed_at IS NOT NULL
         WHERE r.id=%s AND r.active=TRUE
-          AND r.exam_date<=(CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Baghdad')::DATE
+          AND r.exam_deleted=FALSE
         FOR UPDATE OF r;""",(int(user_id),int(review_id)))
     review=cur.fetchone()
-    if not review: return None
+    if not review or review.get('exam_deleted'): return None
+    available=review.get('exam_opens_at') or datetime.combine(review['exam_date'],time(18),tzinfo=ZoneInfo('Asia/Baghdad'))
     cur.execute("SELECT * FROM chemistry_school_review_exam_media WHERE review_id=%s ORDER BY position,id;",(int(review_id),))
     media=cur.fetchall()
     if not media: return None
@@ -3045,7 +3060,7 @@ def _v54_ensure_school_review_task(cur,review_id,user_id):
             if item['payload_type']=='text' and str(item.get('text_content') or '').strip())
         synthetic=-(880000000000000000+int(review_id)*100000000000+int(user_id)%100000000000)
         title=f"مراجعة المدرسة — الأسبوع {review['week_label']}"
-        deadline=datetime_now(cur)+timedelta(days=3650)
+        deadline=review.get('exam_closes_at') or available+timedelta(hours=24)
         cur.execute("""INSERT INTO chemistry_tasks
             (kind,title,chat_id,thread_id,source_message_id,payload_type,file_id,text_content,deadline,
              xp_reward,created_by,target_scope,linked_lectures,exam_pending_activation,
@@ -3071,6 +3086,9 @@ def _v54_ensure_school_review_task(cur,review_id,user_id):
             VALUES(%s,%s,'pending') ON CONFLICT(task_id,user_id) DO NOTHING;""",(task['id'],int(user_id)))
         cur.execute("UPDATE chemistry_school_review_progress SET task_id=%s WHERE review_id=%s AND user_id=%s;",
             (task['id'],int(review_id),int(user_id)))
+    if task:
+        cur.execute('UPDATE chemistry_tasks SET exam_available_at=%s WHERE id=%s RETURNING *;',(available,task['id']))
+        task=cur.fetchone()
     return task
 
 
@@ -3083,13 +3101,13 @@ async def v54_complete_school_review(review_id,user_id):
                     AND s.reset_pending=FALSE AND s.study_track='course'
                 WHERE r.id=%s AND r.active=TRUE AND r.published_at IS NOT NULL
                   AND r.publish_date<=(CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Baghdad')::DATE
-                  AND r.exam_date>=(CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Baghdad')::DATE
+                  
                 FOR UPDATE OF r,s;""",(int(user_id),int(review_id)))
             review=cur.fetchone()
             if not review: return {'status':'unavailable'}
             cur.execute("""INSERT INTO chemistry_school_review_progress(review_id,user_id,completed_at,xp_awarded)
                 VALUES(%s,%s,CURRENT_TIMESTAMP,FALSE)
-                ON CONFLICT(review_id,user_id) DO NOTHING RETURNING *;""",(int(review_id),int(user_id)))
+                ON CONFLICT(review_id,user_id) DO UPDATE SET completed_at=COALESCE(chemistry_school_review_progress.completed_at,EXCLUDED.completed_at) RETURNING *;""",(int(review_id),int(user_id)))
             inserted=cur.fetchone(); awarded=0
             if inserted:
                 awarded=_set_xp_event(cur,int(user_id),30,'إكمال مراجعة المدرسة',f'school_review:{int(review_id)}:{int(user_id)}')
@@ -3105,6 +3123,13 @@ async def v54_prepare_school_review_exam(review_id,user_id):
         with connect() as conn,conn.cursor() as cur:
             task=_v54_ensure_school_review_task(cur,int(review_id),int(user_id))
             if not task: return {'status':'waiting'}
+            now=datetime_now(cur)
+            cur.execute('SELECT extended_until FROM chemistry_task_extensions WHERE task_id=%s AND user_id=%s;',(task['id'],int(user_id)))
+            extension=cur.fetchone() or {}
+            until=extension.get('extended_until')
+            effective=max(task['deadline'],until) if until else task['deadline']
+            if task.get('exam_available_at') and task['exam_available_at']>now: return {'status':'scheduled','task':task}
+            if effective<=now or (task.get('closed') and not (until and until>now)): return {'status':'closed','task':task}
             cur.execute("SELECT submitted_at FROM chemistry_submissions WHERE task_id=%s AND user_id=%s;",(task['id'],int(user_id)))
             submitted=cur.fetchone()
             if submitted and submitted.get('submitted_at'): return {'status':'submitted','task':task}
@@ -3198,7 +3223,9 @@ async def v54_due_school_review_exams(limit=100):
                 JOIN chemistry_students s ON s.user_id=p.user_id AND s.approved=TRUE
                     AND s.reset_pending=FALSE AND s.study_track='course'
                 WHERE p.completed_at IS NOT NULL
-                  AND r.exam_date<=(CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Baghdad')::DATE
+                  AND r.exam_deleted=FALSE AND r.exam_manual_closed=FALSE
+                  AND COALESCE(r.exam_opens_at,((r.exam_date+TIME '18:00') AT TIME ZONE 'Asia/Baghdad'))<=CURRENT_TIMESTAMP
+                  AND COALESCE(r.exam_closes_at,((r.exam_date+TIME '18:00') AT TIME ZONE 'Asia/Baghdad')+INTERVAL '24 hours')>CURRENT_TIMESTAMP
                   AND EXISTS(SELECT 1 FROM chemistry_school_review_exam_media m WHERE m.review_id=r.id)
                   AND (p.task_id IS NULL OR p.approval_notified_at IS NULL)
                 ORDER BY r.week_no,p.user_id LIMIT %s;""",(max(1,min(500,int(limit))),))
@@ -3270,7 +3297,7 @@ async def v29_ready_personal_exams():
             cur.execute("""SELECT d.id definition_id,s.user_id,d.title FROM chemistry_linked_exam_definitions d
                 JOIN chemistry_students s ON s.approved=TRUE AND s.onboarding_version>=19
                 WHERE d.target_scope='chapter' AND s.study_track='chapter' AND s.current_chapter=d.chapter
-                AND NOT EXISTS(SELECT 1 FROM chemistry_tasks t WHERE t.exam_definition_id=d.id AND t.target_scope='student:'||s.user_id);""")
+                AND NOT EXISTS(SELECT 1 FROM chemistry_tasks t WHERE t.exam_definition_id=d.id AND t.target_scope='student:'||s.user_id::text);""")
             candidates=cur.fetchall(); ready=[]
             for c in candidates:
                 required=set()
@@ -5653,10 +5680,10 @@ async def v45_exam_task_status(user_id,task_id):
             cur.execute("""SELECT t.*,d.target_scope AS definition_scope,d.chapter AS definition_chapter,
                     (COALESCE(t.published_at,t.exam_available_at,d.created_at,t.created_at)>=(
                       COALESCE((SELECT value::date FROM chemistry_settings WHERE key='v45_exam_enforcement_cutoff'),DATE '2026-09-07')
-                      AT TIME ZONE 'Asia/Baghdad') OR COALESCE(e.extended_until>CURRENT_TIMESTAMP,FALSE)) AS enforced,
+                      AT TIME ZONE 'Asia/Baghdad') OR t.school_review_id IS NOT NULL OR COALESCE(e.extended_until>CURRENT_TIMESTAMP,FALSE)) AS enforced,
                     ((d.target_scope='course' AND st.study_track='course') OR
                      (d.target_scope='chapter' AND st.study_track='chapter' AND d.chapter=st.current_chapter) OR
-                     (d.id IS NULL AND (t.target_scope='all' OR
+                     (d.id IS NULL AND ((t.school_review_id IS NOT NULL AND t.target_scope='student:'||st.user_id::text AND st.approved=TRUE AND st.reset_pending=FALSE AND st.study_track='course' AND EXISTS(SELECT 1 FROM chemistry_school_review_students se JOIN chemistry_school_reviews sr ON sr.id=t.school_review_id WHERE se.user_id=st.user_id AND se.active=TRUE AND sr.active=TRUE AND sr.exam_deleted=FALSE)) OR t.target_scope='all' OR
                        (st.study_track='course' AND t.target_scope='course') OR
                        (st.study_track='chapter' AND t.target_scope='chapter_'||st.current_chapter)))) AS track_allowed,
                     GREATEST(t.deadline,COALESCE(e.extended_until,t.deadline)) AS effective_deadline,
@@ -5683,7 +5710,7 @@ async def v45_request_late_exam(task_id,user_id,xp_cost=150,hours=2):
                     GREATEST(t.deadline,COALESCE(e.extended_until,t.deadline)) AS effective_deadline,
                     (COALESCE(t.published_at,t.exam_available_at,d.created_at,t.created_at)>=(
                       COALESCE((SELECT value::date FROM chemistry_settings WHERE key='v45_exam_enforcement_cutoff'),DATE '2026-09-07')
-                      AT TIME ZONE 'Asia/Baghdad') OR COALESCE(e.extended_until>CURRENT_TIMESTAMP,FALSE)) AS enforced
+                      AT TIME ZONE 'Asia/Baghdad') OR t.school_review_id IS NOT NULL OR COALESCE(e.extended_until>CURRENT_TIMESTAMP,FALSE)) AS enforced
                 FROM chemistry_tasks t
                 JOIN chemistry_task_students ts ON ts.task_id=t.id AND ts.user_id=%s
                 JOIN chemistry_students s ON s.user_id=ts.user_id
@@ -5692,7 +5719,7 @@ async def v45_request_late_exam(task_id,user_id,xp_cost=150,hours=2):
                 WHERE t.id=%s AND t.kind='exam' AND (d.id IS NULL OR d.deleted_at IS NULL)
                   AND ((d.target_scope='course' AND s.study_track='course') OR
                     (d.target_scope='chapter' AND s.study_track='chapter' AND d.chapter=s.current_chapter) OR
-                    (d.id IS NULL AND (t.target_scope='all' OR
+                    (d.id IS NULL AND ((t.school_review_id IS NOT NULL AND t.target_scope='student:'||s.user_id::text AND s.approved=TRUE AND s.reset_pending=FALSE AND s.study_track='course' AND EXISTS(SELECT 1 FROM chemistry_school_review_students se JOIN chemistry_school_reviews sr ON sr.id=t.school_review_id WHERE se.user_id=s.user_id AND se.active=TRUE AND sr.active=TRUE AND sr.exam_deleted=FALSE)) OR t.target_scope='all' OR
                       (s.study_track='course' AND t.target_scope='course') OR
                       (s.study_track='chapter' AND t.target_scope='chapter_'||s.current_chapter))))
                 FOR UPDATE OF t,s;""",(int(user_id),int(task_id)))
@@ -6228,7 +6255,7 @@ async def v29_ready_personal_exams():
                 JOIN chemistry_students s ON s.current_chapter=d.chapter AND s.study_track='chapter'
                 WHERE s.approved=TRUE AND s.reset_pending=FALSE AND s.onboarding_version>=19
                 AND d.target_scope='chapter' AND d.deleted_at IS NULL
-                AND NOT EXISTS(SELECT 1 FROM chemistry_tasks t WHERE t.exam_definition_id=d.id AND t.target_scope='student:'||s.user_id);""")
+                AND NOT EXISTS(SELECT 1 FROM chemistry_tasks t WHERE t.exam_definition_id=d.id AND t.target_scope='student:'||s.user_id::text);""")
             ready=[]
             for student in cur.fetchall():
                 required={p for p in _v47_required_lectures(cur,student['definition_id']) if not v47_before_start(student,*p)}
@@ -7272,7 +7299,7 @@ async def v51_admin_students():
         with connect() as conn,conn.cursor() as cur:
             cur.execute("""SELECT user_id,username,full_name,school,target_grade,approved,
                     xp,warnings,parent_chat_id,parent_full_name,parent_approved,registered_at,
-                    study_track,current_chapter,start_chapter,start_prep_no,track_started_on
+                    study_track,current_chapter,start_chapter,start_prep_no,track_started_on,admin_blocked,admin_manual_active
                 FROM chemistry_students WHERE reset_pending=FALSE
                 ORDER BY approved DESC,registered_at DESC,user_id;""")
             return cur.fetchall()
