@@ -99,7 +99,7 @@ _OWNER_ERROR_ALERT_AT=0.0
 
 REG_NAME, REG_SCHOOL, REG_GRADE, REG_JOIN = range(4)
 DIV = "━━━━━━━━━━━━━━━━━━"
-BUILD_VERSION = "chemistry-preview-course-exams-v3"
+BUILD_VERSION = "chemistry-admin-control-v5"
 NEON_ECO_MODE=_env_bool("NEON_ECO_MODE",True)
 NEON_ECO_INTERVAL_SECONDS=max(900,_env_int("NEON_ECO_INTERVAL_SECONDS",1800))
 NEON_BACKGROUND_INTERVAL_SECONDS=max(3600,_env_int("NEON_BACKGROUND_INTERVAL_SECONDS",21600))
@@ -6784,6 +6784,7 @@ async def v51_today_preparation(query):
     else:
         chapter=int(prep['chapter']); pending=list(prep.get('pending_lectures') or [])
         all_lectures=sorted(set(pending+list(prep.get('completed_lectures') or [])))
+        lines += ([prep['title']] if prep.get('title') else [])
         lines += [f'📘 الفصل {chapter}',
             '🎞 المحاضرات: '+(' + '.join(map(str,all_lectures)) or '-')]
         if prep.get('early'):
@@ -6921,6 +6922,7 @@ async def v51_daily_tasks_menu(query):
     if prep and prep.get('pending_lectures'):
         lectures=' + '.join(str(number) for number in prep['pending_lectures'])
         early=' — دراسة مبكرة' if prep.get('early') else ''
+        if prep.get('title'):lines.append(prep['title'])
         lines.append(f"🎬 محاضراتك: الفصل {prep['chapter']} | {lectures}{early}"); total+=len(prep['pending_lectures'])
         rows.append([InlineKeyboardButton('🎬 فتح محاضراتي',callback_data='today_prep',style='success')])
     elif prep:
@@ -7803,6 +7805,12 @@ _install_admin_student_access(globals(),db)
 
 from student_experience import install as _install_student_experience
 _install_student_experience(globals(),db)
+
+from education_update import install as _install_education_update
+_install_education_update(globals(),db)
+
+from admin_control import install as _install_admin_control
+_install_admin_control(globals(),db)
 
 if __name__ == "__main__":
     main()

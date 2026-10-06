@@ -715,6 +715,14 @@ async def activate_exam(task_id,user_id,approved_by,hours=None):
                 available=review.get('exam_opens_at') or current.get('exam_available_at') or now
                 deadline=review.get('exam_closes_at') or current['deadline']
                 if available>now or deadline<=now: return None
+            elif current.get('exam_definition_id'):
+                cur.execute('SELECT target_scope FROM chemistry_linked_exam_definitions WHERE id=%s;',(current['exam_definition_id'],))
+                definition=cur.fetchone()
+                if definition and definition['target_scope']=='course' and not current.get('optional_practice'):
+                    # Parent approval preserves the shared course window, including Thursday-only exams.
+                    available=current.get('exam_available_at') or now
+                    deadline=current['deadline']
+                    if deadline<=now:return None
             cur.execute("""UPDATE chemistry_tasks SET exam_pending_activation=FALSE,deadline=%s,closed=FALSE,
                 exam_available_at=%s,published_at=COALESCE(published_at,%s)
                 WHERE id=%s RETURNING *;""",(deadline,available,now,task_id));task=cur.fetchone()
@@ -6956,7 +6964,7 @@ def init_db():
 async def v51_preparation_catalog_overrides():
     def op():
         with connect() as conn,conn.cursor() as cur:
-            cur.execute("""SELECT chapter,prep_no,lectures,updated_by,updated_at
+            cur.execute("""SELECT chapter,prep_no,lectures,title,updated_by,updated_at
                 FROM chemistry_preparation_catalog_overrides ORDER BY chapter,prep_no;""")
             return cur.fetchall()
     return await run(op)
@@ -7821,6 +7829,7 @@ async def delete_parent_account(parent_chat_id):
             cur.execute("SELECT DISTINCT student_id FROM chemistry_parent_links WHERE parent_chat_id=%s ORDER BY student_id;",(parent_chat_id,))
             affected=[r['student_id'] for r in cur.fetchall()]
             if not affected: return {"status":"not_parent"}
+            cur.execute("DELETE FROM chemistry_guardian_threads WHERE parent_id=%s;",(parent_chat_id,))
             cur.execute("DELETE FROM chemistry_parent_links WHERE parent_chat_id=%s;",(parent_chat_id,))
             cur.execute("DELETE FROM chemistry_communication_routes WHERE chat_id=%s AND role='parent';",(parent_chat_id,))
             for student_id in affected:
