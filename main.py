@@ -99,7 +99,7 @@ _OWNER_ERROR_ALERT_AT=0.0
 
 REG_NAME, REG_SCHOOL, REG_GRADE, REG_JOIN = range(4)
 DIV = "━━━━━━━━━━━━━━━━━━"
-BUILD_VERSION = "chemistry-admin-control-v5"
+BUILD_VERSION = "chemistry-v8-homework-warning-fix"
 NEON_ECO_MODE=_env_bool("NEON_ECO_MODE",True)
 NEON_ECO_INTERVAL_SECONDS=max(900,_env_int("NEON_ECO_INTERVAL_SECONDS",1800))
 NEON_BACKGROUND_INTERVAL_SECONDS=max(3600,_env_int("NEON_BACKGROUND_INTERVAL_SECONDS",21600))
@@ -6831,11 +6831,7 @@ async def _v52_complete_lecture(query,context,chapter,lecture):
     progress=await lecture_progress(uid,chapter,lecture)
     if progress and progress.get('completed_at'):
         await query.answer('تم تسجيل هذه المحاضرة مسبقا.',show_alert=True); return
-    current=await db.v52_current_preparation(uid)
-    allowed=bool(current and int(current['chapter'])==int(chapter) and int(lecture) in
-        set((current.get('pending_lectures') or [])+(current.get('completed_lectures') or [])))
-    if not allowed:
-        allowed=await db.lecture_opened_in_assigned_preparation(uid,chapter,lecture)
+    allowed=await db.lecture_opened_in_assigned_preparation(uid,chapter,lecture)
     if not allowed:
         await query.answer('هذه المحاضرة ليست ضمن محاضراتك الحالية.',show_alert=True); return
     if not progress or not progress.get('opened_at'):
@@ -7811,6 +7807,9 @@ _install_education_update(globals(),db)
 
 from admin_control import install as _install_admin_control
 _install_admin_control(globals(),db)
+
+from homework_management import install as _install_homework_management
+_install_homework_management(globals(),db,'chemistry')
 
 if __name__ == "__main__":
     main()

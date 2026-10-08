@@ -1,3 +1,15 @@
+# أحدث إصلاح: إنذارات الواجبات
+
+راجع [WARNING_FIX.md](WARNING_FIX.md) للتحديث وطريقة الإلغاء.
+
+# أحدث تحديث: إدارة الواجبات
+
+راجع [HOMEWORK_UPDATE.md](HOMEWORK_UPDATE.md) للميزات وطريقة الاستخدام.
+
+# تحديث فتح المحاضرات
+
+اقرأ [SCHEDULE_FIX.md](SCHEDULE_FIX.md) لأحدث إصلاح.
+
 النسخة الحالية chemistry-admin-control-v5 — راجع UPDATE_V5.md قبل الاستخدام.
 
 نسخة chemistry-weekly-guardian-v4: راجع UPDATE_V4.md للتغييرات وتعليمات التشغيل الحالية.

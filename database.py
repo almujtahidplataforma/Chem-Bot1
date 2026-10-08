@@ -1842,7 +1842,20 @@ async def lecture_progress(user_id,chapter,lecture):
 
 
 async def lecture_opened_in_assigned_preparation(user_id,chapter,lecture):
-    """Keep an already opened lecture finishable when the next prep is published."""
+    """Validate against the live edited assignment, then historical published access.
+
+    An opened timestamp is required on both paths. A calendar edit can replace
+    the old publication dates, so those dates must not reject today's assignment.
+    """
+    student=await get_student(int(user_id))
+    if not student or not student.get('approved') or student.get('reset_pending') or student.get('admin_blocked'):
+        return False
+    progress=await lecture_progress(int(user_id),int(chapter),int(lecture))
+    if not progress or not progress.get('opened_at'):
+        return False
+    access=await v37_preparation_access(int(user_id),int(chapter),int(lecture))
+    if access.get('allowed'):
+        return True
     def op():
         with connect() as conn, conn.cursor() as cur:
             cur.execute("""SELECT s.study_track,s.track_started_on,lp.opened_at
@@ -2188,8 +2201,10 @@ async def buy_remove_warning(user_id):
             cur.execute("SELECT xp,warnings FROM chemistry_students WHERE user_id=%s FOR UPDATE;",(user_id,)); s=cur.fetchone()
             if not s or s["warnings"]<1: return "none"
             if s["xp"]<500: return "xp"
-            cur.execute("DELETE FROM chemistry_warning_log WHERE id=(SELECT id FROM chemistry_warning_log WHERE user_id=%s ORDER BY created_at DESC LIMIT 1) RETURNING id;",(user_id,)); deleted=cur.fetchone()
+            cur.execute("DELETE FROM chemistry_warning_log WHERE id=(SELECT id FROM chemistry_warning_log WHERE user_id=%s ORDER BY created_at DESC LIMIT 1) RETURNING id,task_id;",(user_id,)); deleted=cur.fetchone()
             if not deleted: return "none"
+            if deleted.get('task_id'):
+                cur.execute("INSERT INTO chemistry_exam_warning_waivers(task_id,user_id,waived_by) VALUES(%s,%s,%s) ON CONFLICT(task_id,user_id) DO NOTHING;",(deleted['task_id'],user_id,0))
             cur.execute("UPDATE chemistry_students SET warnings=warnings-1 WHERE user_id=%s;",(user_id,))
             _set_xp_event(cur,user_id,-500,"فك إنذار واحد",f"unwarn-purchase:{user_id}:{deleted['id']}")
             conn.commit(); return "ok"
@@ -2437,7 +2452,8 @@ async def add_warning_once(user_id,reason,issued_by=0,task_id=None):
                     JOIN chemistry_task_students ts ON ts.task_id=t.id AND ts.user_id=%s
                     LEFT JOIN chemistry_linked_exam_definitions d ON d.id=t.exam_definition_id
                     LEFT JOIN chemistry_task_extensions e ON e.task_id=t.id AND e.user_id=%s
-                    WHERE t.id=%s AND t.optional_practice=FALSE
+                    WHERE t.id=%s AND t.optional_practice=FALSE AND t.retired_obligation=FALSE
+                    AND (t.kind<>'homework' OR t.homework_manual_closed=FALSE)
                     AND (d.id IS NULL OR d.deleted_at IS NULL)
                     AND GREATEST(t.deadline,COALESCE(e.extended_until,t.deadline))<=clock_timestamp()
                     AND NOT EXISTS(SELECT 1 FROM chemistry_submissions sub WHERE sub.task_id=t.id AND sub.user_id=%s AND sub.submitted_at IS NOT NULL)
@@ -2461,8 +2477,10 @@ async def remove_warning(user_id,removed_by,warning_id=None):
             if selected_warning_id is None:
                 cur.execute("SELECT id FROM chemistry_warning_log WHERE user_id=%s ORDER BY created_at DESC LIMIT 1;",(user_id,)); target=cur.fetchone(); selected_warning_id=target["id"] if target else None
             if selected_warning_id is None: return None
-            cur.execute("DELETE FROM chemistry_warning_log WHERE id=%s AND user_id=%s RETURNING id;",(selected_warning_id,user_id)); deleted=cur.fetchone()
+            cur.execute("DELETE FROM chemistry_warning_log WHERE id=%s AND user_id=%s RETURNING id,task_id;",(selected_warning_id,user_id)); deleted=cur.fetchone()
             if not deleted: return None
+            if deleted.get('task_id'):
+                cur.execute("INSERT INTO chemistry_exam_warning_waivers(task_id,user_id,waived_by) VALUES(%s,%s,%s) ON CONFLICT(task_id,user_id) DO NOTHING;",(deleted['task_id'],user_id,removed_by))
             cur.execute("UPDATE chemistry_students SET warnings=GREATEST(0,warnings-1) WHERE user_id=%s RETURNING warnings;",(user_id,)); row=cur.fetchone()
             cur.execute("INSERT INTO chemistry_audit(actor_id,action,details) VALUES(%s,'remove_warning',%s);",(removed_by,f"{user_id}:{selected_warning_id}")); conn.commit(); return row["warnings"] if row else 0
     return await run(op)
@@ -4021,7 +4039,7 @@ async def v43_remove_warning(user_id,warning_id,admin_id):
             if not warning: return {"status":"not_found"}
             cur.execute("DELETE FROM chemistry_warning_log WHERE id=%s;",(int(warning_id),))
             cur.execute("UPDATE chemistry_students SET warnings=GREATEST(0,warnings-1) WHERE user_id=%s RETURNING warnings,full_name;",(int(user_id),)); student=cur.fetchone()
-            if warning.get("task_id") and warning.get("kind")=="exam":
+            if warning.get("task_id"):
                 cur.execute("""INSERT INTO chemistry_exam_warning_waivers(task_id,user_id,waived_by)
                     VALUES(%s,%s,%s) ON CONFLICT(task_id,user_id) DO UPDATE SET
                     waived_by=EXCLUDED.waived_by,created_at=CURRENT_TIMESTAMP;""",(warning["task_id"],int(user_id),int(admin_id)))
@@ -6732,6 +6750,7 @@ async def recently_closed_tasks_for_warning_recovery(days=30):
     def op():
         with connect() as conn,conn.cursor() as cur:
             cur.execute("""SELECT * FROM chemistry_tasks WHERE closed=TRUE AND retired_obligation=FALSE
+                AND (kind<>'homework' OR homework_manual_closed=FALSE)
                 AND optional_practice=FALSE AND deadline<=CURRENT_TIMESTAMP
                 AND deadline>=CURRENT_TIMESTAMP-(%s || ' days')::INTERVAL ORDER BY deadline,id;""",
                 (max(1,min(90,int(days))),)); return cur.fetchall()
@@ -7736,16 +7755,17 @@ async def v52_unlock_next_preparation(user_id):
 
 _v52_previous_preparation_access=v37_preparation_access
 async def v37_preparation_access(user_id,chapter,lecture):
-    def op():
-        with connect() as conn,conn.cursor() as cur:
-            cur.execute("""SELECT * FROM chemistry_early_preparation_unlocks
-                WHERE user_id=%s AND chapter=%s AND completed_at IS NULL
-                  AND %s=ANY(STRING_TO_ARRAY(lectures,',')::INTEGER[])
-                ORDER BY unlocked_at DESC LIMIT 1;""",(int(user_id),int(chapter),int(lecture)))
-            return cur.fetchone()
-    early=await run(op)
-    if early: return {"allowed":True,"reason":"early","row":early}
-    return await _v52_previous_preparation_access(user_id,chapter,lecture)
+    """Use the same live assignment as Today's Lectures, including edited calendars.
+
+    Never fall back to a stale personal schedule for a course student whose
+    schedule_mode is custom. Early access is already resolved by this provider.
+    """
+    row=await v52_current_preparation(int(user_id))
+    if not row:
+        return {"allowed":False,"reason":"finished","row":None}
+    assigned=set(row.get('pending_lectures') or []) | set(row.get('completed_lectures') or [])
+    allowed=int(row['chapter'])==int(chapter) and int(lecture) in {int(n) for n in assigned}
+    return {"allowed":allowed,"reason":("early" if row.get('early') else "ok") if allowed else "next_only","row":row}
 
 
 _v52_previous_award_preparation=award_daily_preparation
