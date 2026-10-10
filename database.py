@@ -3075,6 +3075,9 @@ def _v54_ensure_school_review_task(cur,review_id,user_id):
     review=cur.fetchone()
     if not review or review.get('exam_deleted'): return None
     available=review.get('exam_opens_at') or datetime.combine(review['exam_date'],time(18),tzinfo=ZoneInfo('Asia/Baghdad'))
+    # For scheduled PDF exams, request parental approval only when the exam opens.
+    if review.get('source_type')=='pdf' and available>datetime_now(cur):
+        return None
     cur.execute("SELECT * FROM chemistry_school_review_exam_media WHERE review_id=%s ORDER BY position,id;",(int(review_id),))
     media=cur.fetchall()
     if not media: return None
@@ -3082,6 +3085,10 @@ def _v54_ensure_school_review_task(cur,review_id,user_id):
     cur.execute("SELECT * FROM chemistry_tasks WHERE school_review_id=%s AND target_scope=%s ORDER BY id DESC LIMIT 1;",
         (int(review_id),scope))
     task=cur.fetchone()
+    # An expired PDF publication cannot create a brand-new student attempt.
+    # Previously created tasks remain available for explicit individual extensions.
+    if not task and review.get('source_type')=='pdf' and review.get('exam_closes_at') and review['exam_closes_at']<=datetime_now(cur):
+        return None
     if not task:
         first=next((item for item in media if item['payload_type']!='text'),media[0])
         combined_text='\n\n'.join(item['text_content'] for item in media
@@ -3089,16 +3096,17 @@ def _v54_ensure_school_review_task(cur,review_id,user_id):
         synthetic=-(880000000000000000+int(review_id)*100000000000+int(user_id)%100000000000)
         title=f"مراجعة المدرسة — الأسبوع {review['week_label']}"
         deadline=review.get('exam_closes_at') or available+timedelta(hours=24)
+        duration_hours=max(1,int((deadline-available).total_seconds()/3600+0.999))
         cur.execute("""INSERT INTO chemistry_tasks
             (kind,title,chat_id,thread_id,source_message_id,payload_type,file_id,text_content,deadline,
              xp_reward,created_by,target_scope,linked_lectures,exam_pending_activation,
              exam_duration_hours,exam_approval_required,closed,optional_practice,school_review_id)
-            VALUES('exam',%s,%s,0,%s,%s,%s,%s,%s,20,%s,%s,'',TRUE,24,TRUE,FALSE,TRUE,%s)
+            VALUES('exam',%s,%s,0,%s,%s,%s,%s,%s,20,%s,%s,'',TRUE,%s,TRUE,FALSE,TRUE,%s)
             ON CONFLICT (school_review_id,target_scope)
               WHERE school_review_id IS NOT NULL AND target_scope LIKE 'student:%%'
             DO NOTHING RETURNING *;""",
             (title,OWNER_CHAT_ID or 0,synthetic,first['payload_type'],first.get('file_id'),combined_text or title,
-             deadline,OWNER_CHAT_ID or 0,scope,int(review_id)))
+             deadline,OWNER_CHAT_ID or 0,scope,duration_hours,int(review_id)))
         task=cur.fetchone()
         if not task:
             cur.execute("SELECT * FROM chemistry_tasks WHERE school_review_id=%s AND target_scope=%s ORDER BY id DESC LIMIT 1;",
@@ -3219,7 +3227,7 @@ async def v54_due_school_review_reminders(limit=100):
                 JOIN chemistry_students s ON s.user_id=e.user_id AND s.approved=TRUE
                     AND s.reset_pending=FALSE AND s.study_track='course'
                 LEFT JOIN chemistry_school_review_progress p ON p.review_id=r.id AND p.user_id=s.user_id
-                WHERE r.active=TRUE AND r.published_at IS NOT NULL AND p.completed_at IS NULL
+                WHERE r.active=TRUE AND r.source_type='weekly' AND r.published_at IS NOT NULL AND p.completed_at IS NULL
                   AND r.exam_date>=(CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Baghdad')::DATE
                   AND r.exam_date-(CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Baghdad')::DATE<=4)
                 SELECT due.* FROM due

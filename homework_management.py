@@ -85,7 +85,7 @@ def install(ns,db,prefix):
     old_menu=ns['main_menu']
     def main_menu(admin=False):
         m=old_menu(admin)
-        return K([[B('📚 إدارة الواجبات',callback_data='hw|list|0')]]+[list(r) for r in m.inline_keyboard]) if admin else m
+        return m
     ns['main_menu']=main_menu
     def back(tid=None):return [B('◀️ الواجب',callback_data=f'hw|open|{tid}')] if tid else [B('🏠 القائمة',callback_data='menu')]
     async def listing(q,page):
@@ -93,7 +93,7 @@ def install(ns,db,prefix):
         kb=[[B(('🔒 ' if r['closed'] else '📚 ')+r['title'][:45],callback_data=f"hw|open|{r['id']}")] for r in rows[:10]]
         if page:kb.append([B('السابق',callback_data=f'hw|list|{page-1}')])
         if len(rows)>10:kb.append([B('التالي',callback_data=f'hw|list|{page+1}')])
-        kb.append([B('➕ نشر واجب',callback_data='manualkind|homework')]);kb.append(back())
+        kb.append([B('➕ نشر واجب',callback_data='v29_pub|homework')]);kb.append(back())
         await ns['safe_homework_panel'](q,'📚 إدارة الواجبات\nاختر الواجب للتحكم به.',K(kb))
     async def panel(q,tid):
         t=await task(tid)

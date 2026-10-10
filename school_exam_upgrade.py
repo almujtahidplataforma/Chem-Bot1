@@ -56,7 +56,7 @@ def install(ns, db, prefix):
                     elif action.startswith('extend:'): b=max(b,datetime.now(zone))+timedelta(hours=int(action.split(':')[1]))
                     if b<=a: raise ValueError('End must follow start')
                     cur.execute(f'''UPDATE {prefix}_school_reviews SET exam_opens_at=%s,exam_closes_at=%s,
-                        exam_manual_closed=%s,exam_date=%s,publish_date=LEAST(publish_date,%s) WHERE id=%s;''',(a,b,closed,a.astimezone(zone).date(),a.astimezone(zone).date(),review_id))
+                        exam_manual_closed=%s,exam_date=%s,publish_date=LEAST(publish_date,%s) WHERE id=%s;''',(a,b,closed,b.astimezone(zone).date(),a.astimezone(zone).date(),review_id))
                     cur.execute(f'''UPDATE {prefix}_tasks SET deadline=%s,exam_available_at=%s,closed=%s,
                         teacher_deadline_reminder_sent=FALSE WHERE school_review_id=%s;''',(b,a,closed,review_id))
                     # Manual closure cancels personal extensions as well.

@@ -99,7 +99,7 @@ _OWNER_ERROR_ALERT_AT=0.0
 
 REG_NAME, REG_SCHOOL, REG_GRADE, REG_JOIN = range(4)
 DIV = "━━━━━━━━━━━━━━━━━━"
-BUILD_VERSION = "chemistry-v8-homework-warning-fix"
+BUILD_VERSION = "chemistry-prior-learning-homework-update"
 NEON_ECO_MODE=_env_bool("NEON_ECO_MODE",True)
 NEON_ECO_INTERVAL_SECONDS=max(900,_env_int("NEON_ECO_INTERVAL_SECONDS",1800))
 NEON_BACKGROUND_INTERVAL_SECONDS=max(3600,_env_int("NEON_BACKGROUND_INTERVAL_SECONDS",21600))
@@ -7017,7 +7017,7 @@ async def button_handler(update,context):
         context.user_data.pop('v29_publish',None)
         context.user_data.pop('linked_exam',None)
         kb=InlineKeyboardMarkup([
-            [InlineKeyboardButton('📚 نشر واجب',callback_data='v29_pub|homework',style='primary')],
+            [InlineKeyboardButton('📚 نشر وإدارة الواجبات',callback_data='hw|list|0',style='primary')],
             [InlineKeyboardButton('👥 امتحان طلاب الدورة الحالية',callback_data='v53_course_exam_start',style='success')],
             [InlineKeyboardButton('📘 امتحان طلاب الدراسة حسب الفصول',callback_data='v53_chapter_exam_start',style='primary')],
             [InlineKeyboardButton('🏆 تراكمي طلاب الدورة الحالية',callback_data='v53_course_cumulative_start',style='primary')],
@@ -7331,8 +7331,14 @@ async def v54_school_review_exams(query):
     rows=[]
     for review in catalog:
         if not review.get('published_at') and review['exam_date']>today: continue
+        if review.get('source_type')=='pdf' and review.get('exam_deleted'): continue
+        pdf_closed=(review.get('source_type')=='pdf' and
+                    (review.get('exam_manual_closed') or
+                     (review.get('exam_closes_at') and review['exam_closes_at']<=datetime.now(TIMEZONE))))
         if review.get('submitted_at'):
             mark,state,callback='✅','تم التسليم','v54_school_done'
+        elif not review.get('completed_at') and pdf_closed:
+            mark,state,callback='🔒','انتهى موعد الامتحان',f"v54_school_review_open|{review['id']}"
         elif not review.get('completed_at'):
             mark,state,callback='🔒','أكمل المراجعة أولا',f"v54_school_review_open|{review['id']}"
         elif (review.get('exam_opens_at') and review['exam_opens_at']>datetime.now(TIMEZONE)) or (not review.get('exam_opens_at') and review['exam_date']>today):
@@ -7428,7 +7434,7 @@ async def _v54_notify_parent_exam(context,user_id,task,review):
             await context.bot.send_message(parent_id,bold(
                 f"🏫 طلب امتحان مراجعة المدرسة\n{DIV}\n👤 الطالب: {student['full_name']}\n"
                 f"✦ الأسبوع {review['week_label']} ✦\n📚 {review['topics']}\n\n"
-                'أكمل الطالب المراجعة. وافق لفتح الامتحان لمدة 24 ساعة.'),
+                'أكمل الطالب المراجعة. وافق لفتح الامتحان ضمن الموعد المحدد من الإدارة.'),
                 parse_mode=ParseMode.HTML,reply_markup=kb); sent=True
         except TelegramError: pass
     if not sent and OWNER_CHAT_ID:
@@ -7602,6 +7608,8 @@ async def private_messages(update,context):
             sent=await _v54_notify_parent_exam(context,uid,task,review)
             if sent: await db.v54_mark_school_review_exam_notified(review['id'],uid)
             lines.append('🔐 أرسل طلب فتح الامتحان إلى ولي الأمر.')
+        elif review.get('exam_opens_at') and review['exam_opens_at']>datetime.now(TIMEZONE):
+            lines.append(f"⏳ يفتح الامتحان {review['exam_opens_at'].astimezone(TIMEZONE).strftime('%d/%m/%Y %H:%M')}، ثم يطلب موافقة ولي الأمر.")
         elif review['exam_date']>datetime.now(TIMEZONE).date():
             lines.append(f"⏳ يجهز الامتحان بتاريخ {review['exam_date'].strftime('%d/%m/%Y')} ثم يطلب موافقة ولي الأمر.")
         else: lines.append('📭 أسئلة الامتحان لم تضف بعد؛ سيجهزها البوت فور نشرها.')
@@ -7810,6 +7818,12 @@ _install_admin_control(globals(),db)
 
 from homework_management import install as _install_homework_management
 _install_homework_management(globals(),db,'chemistry')
+
+from prior_learning import install as _install_prior_learning
+_install_prior_learning(globals(),db,'chemistry')
+
+from school_pdf_reviews import install as _install_school_pdf_reviews
+_install_school_pdf_reviews(globals(),db,'chemistry')
 
 if __name__ == "__main__":
     main()
