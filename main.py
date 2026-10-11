@@ -75,6 +75,7 @@ PREPARATION_TOPIC_ID = _env_int("PREPARATION_TOPIC_ID")
 HOMEWORK_TOPIC_ID = _env_int("HOMEWORK_TOPIC_ID")
 EXAM_TOPIC_ID = _env_int("EXAM_TOPIC_ID")
 SCHOOL_REVIEW_TOPIC_ID = _env_int("SCHOOL_REVIEW_TOPIC_ID")
+RESOURCE_TOPIC_ID = _env_int("RESOURCE_TOPIC_ID")
 HOMEWORK_GROUP_ID = _env_int("HOMEWORK_GROUP_ID")
 EXAM_GROUP_ID = _env_int("EXAM_GROUP_ID")
 HOMEWORK_SUBMISSIONS_CHAT_ID = _env_int("HOMEWORK_SUBMISSIONS_CHAT_ID",HOMEWORK_GROUP_ID)
@@ -99,7 +100,7 @@ _OWNER_ERROR_ALERT_AT=0.0
 
 REG_NAME, REG_SCHOOL, REG_GRADE, REG_JOIN = range(4)
 DIV = "━━━━━━━━━━━━━━━━━━"
-BUILD_VERSION = "chemistry-prior-learning-homework-update"
+BUILD_VERSION = "chemistry-v9-full-feature-parity-20261011"
 NEON_ECO_MODE=_env_bool("NEON_ECO_MODE",True)
 NEON_ECO_INTERVAL_SECONDS=max(900,_env_int("NEON_ECO_INTERVAL_SECONDS",1800))
 NEON_BACKGROUND_INTERVAL_SECONDS=max(3600,_env_int("NEON_BACKGROUND_INTERVAL_SECONDS",21600))
@@ -582,15 +583,8 @@ async def notify_student_and_parent(bot,student,text):
 
 
 async def ensure_student_topic(bot,student,chat_id):
-    thread_id=await student_topic(student["user_id"],chat_id)
-    if thread_id: return thread_id
-    name=f"{student['full_name']} | {student['user_id']}"[:128]
-    try:
-        topic=await bot.create_forum_topic(chat_id,name)
-        await save_student_topic(student["user_id"],chat_id,topic.message_thread_id)
-        return topic.message_thread_id
-    except TelegramError as exc:
-        logger.warning("Could not create student topic in %s: %s",chat_id,exc); return None
+    """Return a dedicated student thread, or raise. Never return None for General."""
+    return await _submission_topic_router.ensure(bot,student,chat_id)
 
 
 async def receive_submission(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1156,6 +1150,8 @@ async def activation_compliance_job(context: ContextTypes.DEFAULT_TYPE):
             if member.status in (ChatMemberStatus.LEFT,ChatMemberStatus.BANNED): await mark_member_removed(uid); continue
             try: await context.bot.send_message(uid,bold("🚫 انتهت مهلة تفعيل بوت الكيمياء وربط ولي الأمر، لذلك تمت إزالتك من كروب الدورة. يمكنك التواصل مع الإدارة وإكمال التفعيل ثم العودة."),parse_mode=ParseMode.HTML)
             except TelegramError: pass
+            if not await db.v9_activation_still_due(uid):
+                continue  # Admin extended activation or activated student meanwhile.
             await context.bot.ban_chat_member(CHEMISTRY_GROUP_ID,uid)
             await context.bot.unban_chat_member(CHEMISTRY_GROUP_ID,uid,only_if_banned=True)
             await mark_member_removed(uid)
@@ -1418,7 +1414,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             kb=InlineKeyboardMarkup([[InlineKeyboardButton("✅ تفعيل الامتحان",callback_data=f"adminexamallow|{task_id}|{uid}")]])
             await context.bot.send_message(destination,bold(f"🔐 طلب تفعيل من الطالب\n👤 {student_row['full_name']}\n📝 {task['title']}"),parse_mode=ParseMode.HTML,message_thread_id=thread_id,reply_markup=kb)
             await query.answer("أُرسل الطلب للأدمن",show_alert=True)
-        except TelegramError: await query.answer("تعذر إرسال الطلب حالياً.",show_alert=True)
+        except (TelegramError, TopicRoutingError): await query.answer("تعذر إرسال الطلب لتوبك الطالب حالياً.",show_alert=True)
         return
     if data=="guest_continue":
         await query.answer(); await query.edit_message_text(bold("📚 المكتبة العامة لبوت الكيمياء\nيمكنك تصفح المحتوى، أما خدمات الدورة فتحتاج إلى التسجيل."),parse_mode=ParseMode.HTML,reply_markup=guest_menu()); return
@@ -2849,7 +2845,7 @@ def main():
     app.add_handler(MessageHandler(filters.ChatType.GROUPS & ~filters.COMMAND & (filters.PHOTO|filters.Document.ALL|filters.VIDEO),receive_exam_correction),group=0)
     app.add_handler(CallbackQueryHandler(button_handler,pattern=r"^(?!verify_join$).+"),group=1)
     app.add_handler(MessageHandler(filters.ChatType.GROUPS & ~filters.COMMAND & (filters.TEXT|filters.PHOTO|filters.Document.ALL|filters.VIDEO),receive_admin_communication),group=1)
-    app.add_handler(MessageHandler(filters.ChatType.GROUPS & ~filters.COMMAND & (filters.TEXT|filters.PHOTO|filters.Document.ALL|filters.VIDEO),capture_group_task),group=1)
+    app.add_handler(MessageHandler(filters.ChatType.GROUPS & ~filters.COMMAND & (filters.TEXT|filters.PHOTO|filters.Document.ALL|filters.VIDEO),capture_group_task),group=3)
     app.add_handler(MessageHandler(filters.ChatType.PRIVATE & ~filters.COMMAND & (filters.TEXT|filters.PHOTO|filters.Document.ALL|filters.VIDEO),private_messages),group=2)
     app.add_error_handler(error_handler)
     app.run_polling(allowed_updates=Update.ALL_TYPES,drop_pending_updates=False)
@@ -5017,13 +5013,13 @@ async def button_handler(update,context):
         kb=InlineKeyboardMarkup([[
             InlineKeyboardButton("✅ موافقة وفتح الامتحان",callback_data=f"v45_late_decide|{request['id']}|1"),
             InlineKeyboardButton("❌ رفض",callback_data=f"v45_late_decide|{request['id']}|0")]])
-        thread_id=await ensure_student_topic(context.bot,await get_student(uid),destination)
         try:
+            thread_id=await ensure_student_topic(context.bot,await get_student(uid),destination)
             await context.bot.send_message(destination,bold(
                 f"👨‍🏫 طلب امتحان متاخر\n{DIV}\n👤 الطالب: {result['student_name']}\n📝 {task['title']}\n"
                 f"💰 الخصم عند الموافقة: {LATE_EXAM_XP_COST} XP\n⏳ مدة المحاولة: {request['hours']} ساعة"),
                 parse_mode=ParseMode.HTML,message_thread_id=thread_id,reply_markup=kb)
-        except TelegramError:
+        except (TelegramError, TopicRoutingError):
             logger.exception("late exam request delivery failed for request %s",request["id"])
             await db.v45_decide_late_exam_request(request["id"],False,0)
             await query.answer("تعذر ايصال الطلب الى الاستاذ حاليا.",show_alert=True); return
@@ -5448,30 +5444,39 @@ async def v48_capture_quick_review(update,context):
     await msg.reply_text(f"✅ حفظ السؤال رقم {row['id']} في الفصل {row['chapter']} - تحضير {row['prep_no']}.",reply_markup=main_menu(True)); return True
 
 
+from student_submission_topics import StudentTopicRouter, TopicRoutingError
+_submission_topic_router = StudentTopicRouter(db)
+
 async def _v48_deliver_submission_row(bot,row):
-    """Deliver once, then register; a sent Telegram message is retained for DB retry."""
+    """Deliver only inside the student's named forum topic, never General."""
     sent_id=row.get('delivered_message_id')
+    legacy_general_id=sent_id if sent_id and not row.get('destination_thread_id') else None
+    if legacy_general_id:
+        # An unfinished outbox row from an older release may point at General.
+        # Re-deliver into the student's topic before accepting that delivery.
+        sent_id=None
     caption=bold(f"📥 {row['title']}\n👤 الطالب: {row['full_name']}\n🆔 {row['user_id']}\n🔐 رقم التسليم: {row['id']}")
     if not sent_id:
-        kwargs={'chat_id':row['destination_chat_id'],'caption':caption,'parse_mode':ParseMode.HTML,
-                'message_thread_id':row.get('destination_thread_id') or None}
+        student=await get_student(row['user_id'])
+        if not student:
+            raise TopicRoutingError('حساب الطالب غير موجود؛ بقي التسليم في الطابور.')
+        sent,thread_id=await _submission_topic_router.send(bot,row,student,caption=caption,parse_mode=ParseMode.HTML)
+        # Store Telegram's message id and actual thread together. If database
+        # persistence fails, remove the message so it cannot be double-graded.
         try:
-            if row['payload_type']=='photo': sent=await bot.send_photo(photo=row['file_id'],**kwargs)
-            elif row['payload_type']=='document': sent=await bot.send_document(document=row['file_id'],**kwargs)
-            else: sent=await bot.send_video(video=row['file_id'],**kwargs)
-        except BadRequest:
-            if not kwargs.get('message_thread_id'): raise
-            kwargs['message_thread_id']=None
-            if row['payload_type']=='photo': sent=await bot.send_photo(photo=row['file_id'],**kwargs)
-            elif row['payload_type']=='document': sent=await bot.send_document(document=row['file_id'],**kwargs)
-            else: sent=await bot.send_video(video=row['file_id'],**kwargs)
-            row={**dict(row),'destination_thread_id':None}
-        marked=await db.v48_mark_delivery_sent(row['id'],sent.message_id,row.get('destination_thread_id'))
+            marked=await db.v48_mark_delivery_sent(row['id'],sent.message_id,thread_id)
+        except Exception:
+            try: await bot.delete_message(row['destination_chat_id'],sent.message_id)
+            except TelegramError: pass
+            raise
         if not marked:
             try: await bot.delete_message(row['destination_chat_id'],sent.message_id)
             except TelegramError: pass
             raise RuntimeError('delivery row disappeared before Telegram message was recorded')
-        row={**dict(row),**dict(marked)}; sent_id=sent.message_id
+        row={**dict(row),**dict(marked)};sent_id=sent.message_id
+        if legacy_general_id:
+            try: await bot.delete_message(row['destination_chat_id'],legacy_general_id)
+            except TelegramError: logger.warning('Old General message could not be deleted: %s',legacy_general_id)
     result=await record_submission(row['task_id'],row['user_id'],row['student_message_id'],
         row['file_unique_id'],row.get('media_group_id'))
     registered=await db.v48_delivery_submission_registered(row['id'])
@@ -5513,7 +5518,7 @@ async def receive_submission(update: Update,context: ContextTypes.DEFAULT_TYPE):
     task_id=context.user_data.get('waiting_submission')
     if not task_id: return False
     student=await get_student(update.effective_user.id)
-    if not student or not student.get('approved') or (not student.get('parent_chat_id') and not student.get('admin_manual_active')) or (not student.get('admin_manual_active') and not await is_channel_member(context.bot,update.effective_user.id)):
+    if not student or not student.get('approved') or (not student.get('parent_chat_id') and not student.get('admin_manual_active') and not await db.chem6_listener(update.effective_user.id)) or (not student.get('admin_manual_active') and not await is_channel_member(context.bot,update.effective_user.id)):
         context.user_data.pop('waiting_submission',None)
         await update.effective_message.reply_text(bold('🔒 لا يمكنك التسليم: يجب تفعيل الحساب وربط ولي الامر والاشتراك بالقناة.'),parse_mode=ParseMode.HTML); return True
     task=await get_task(task_id); effective=await effective_task_deadline(task_id,update.effective_user.id) if task else None
@@ -5539,14 +5544,19 @@ async def receive_submission(update: Update,context: ContextTypes.DEFAULT_TYPE):
         await msg.reply_text('⏰ انتهت صلاحية التسليم او تغيرت حالة الامتحان. افتحه من جديد بعد التمديد.'); return True
     if status=='duplicate':
         await msg.reply_text('🚫 هذا الملف مسجل كتسليم سابق لطالب اخر. ارسل ملف اجابتك الاصلي.'); return True
-    # Topic creation is a Telegram network operation. The durable row must exist first;
-    # if the forum/topic is unavailable, deliver to the configured chat without a topic.
-    thread_id=None
-    try: thread_id=await ensure_student_topic(context.bot,student,destination)
-    except Exception as exc: logger.warning('Student topic unavailable; using destination root: %s',exc)
-    if thread_id:
-        staged=await db.v48_stage_submission_delivery(task_id,update.effective_user.id,msg.message_id,payload_type,
-            media.file_id,media.file_unique_id,msg.media_group_id,destination,thread_id)
+    # The outbox is durable, but no submission is allowed in General.
+    try:
+        thread_id=await _submission_topic_router.ensure(context.bot,student,destination)
+    except Exception as exc:
+        logger.warning('Student topic not ready, submission queued: user=%s chat=%s: %s',
+                       update.effective_user.id,destination,exc)
+        await db.v48_mark_delivery_retry(staged['delivery']['id'],exc,SUBMISSION_RETRY_SECONDS)
+        await msg.reply_text(bold('⏳ حفظت إجابتك، لكن توبكك الخاص غير متاح حالياً. لم تُرسل إلى General. سيعيد البوت المحاولة تلقائياً.'),parse_mode=ParseMode.HTML)
+        return True
+    staged=await db.v48_stage_submission_delivery(task_id,update.effective_user.id,msg.message_id,payload_type,
+        media.file_id,media.file_unique_id,msg.media_group_id,destination,thread_id)
+    if staged.get('status')!='ok':
+        await msg.reply_text('⚠️ تغيّرت حالة التسليم أثناء إنشاء التوبك. افتح المهمة مجدداً.');return True
     row={**dict(staged['delivery']),'title':task['title'],'kind':task['kind'],'full_name':student['full_name'],'parent_chat_id':student.get('parent_chat_id')}
     try:
         result=await _v48_deliver_submission_row(context.bot,row)
@@ -7824,6 +7834,21 @@ _install_prior_learning(globals(),db,'chemistry')
 
 from school_pdf_reviews import install as _install_school_pdf_reviews
 _install_school_pdf_reviews(globals(),db,'chemistry')
+
+from resource_publishing import install as _install_resource_publishing
+_install_resource_publishing(globals(),db,'chemistry')
+
+from chemistry_precision_v6 import install as _install_chemistry_precision_v6
+_install_chemistry_precision_v6(globals(),db)
+
+from admin_ui_v7 import install as _install_admin_ui_v7
+_install_admin_ui_v7(globals(),db,'chemistry')
+
+from admin_ui_v8 import install as _install_admin_ui_v8
+_install_admin_ui_v8(globals(),db,'chemistry')
+
+from admin_v9_last_additions import install as _install_admin_v9_last_additions
+_install_admin_v9_last_additions(globals(),db,'chemistry')
 
 if __name__ == "__main__":
     main()

@@ -5,7 +5,7 @@ import secrets
 ZONE=ZoneInfo('Asia/Baghdad')
 
 def install(ns,db,prefix):
-    if prefix not in {'chemistry','english','mathematics','physics'}:raise ValueError('Invalid subject')
+    if prefix not in {'chemistry','english','mathematics','physics','biology','french','islamic'}:raise ValueError('Invalid subject')
     p=prefix;B=ns['InlineKeyboardButton'];K=ns['InlineKeyboardMarkup']
     async def sql(query,args=(),one=False,write=False):
         def op():
@@ -53,6 +53,41 @@ def install(ns,db,prefix):
             counts AS (SELECT user_id,COUNT(*) n FROM removed GROUP BY user_id)
             UPDATE {p}_students s SET warnings=GREATEST(0,s.warnings-counts.n::INTEGER)
             FROM counts WHERE s.user_id=counts.user_id;""",(tid,),write=True)
+    async def clear_extended_warnings(tid, uid=None):
+        """Withdraw *automatic* warnings for an extended homework window.
+
+        Never create a permanent waiver: if the student still fails to submit by
+        the new effective deadline, the deadline worker can warn once again.
+        Preserve manually issued warnings and warnings for unrelated tasks.
+        """
+        def op():
+            with db.connect() as conn, conn.cursor() as cur:
+                args = (tid,) if uid is None else (tid, uid)
+                clause = 'task_id=%s' if uid is None else 'task_id=%s AND user_id=%s'
+                cur.execute(f"""DELETE FROM {p}_warning_log WHERE {clause}
+                    AND COALESCE(issued_by,0)=0 RETURNING user_id;""", args)
+                affected = sorted({int(row['user_id']) for row in cur.fetchall()})
+                if affected:
+                    cur.execute(f"""UPDATE {p}_students s SET warnings=(
+                        SELECT COUNT(*) FROM {p}_warning_log w WHERE w.user_id=s.user_id)
+                        WHERE s.user_id=ANY(%s);""", (affected,))
+                conn.commit()
+                return len(affected)
+        return await db.run(op)
+
+    # Manual early closing must not create a delayed homework warning in the
+    # recovery worker; an ordinary expired deadline still does.
+    old_missing = db.missing_students
+    async def missing_students(tid):
+        t = await task(tid)
+        if t and (t.get('homework_manual_closed') or t.get('retired_obligation') or
+                  (t.get('homework_opens_at') and t['homework_opens_at'] > datetime.now(ZONE))):
+            return []
+        return await old_missing(tid)
+    db.missing_students = missing_students
+    ns['missing_students'] = missing_students
+    ns['_homework_clear_extended_warnings'] = clear_extended_warnings
+
     async def bonus(tid,uid,value,actor):
         if not 0<=value<=1000:raise ValueError('XP بين 0 و1000.')
         def op():
@@ -102,6 +137,8 @@ def install(ns,db,prefix):
         if t.get('homework_opens_at'):text+=f"\nالبداية: {t['homework_opens_at'].astimezone(ZONE):%d/%m/%Y %H:%M}"
         kb=[[B('✏️ العنوان',callback_data=f'hw|field|{tid}|title'),B('⭐ مكافأة التسليم',callback_data=f'hw|field|{tid}|xp_reward')],
             [B('🗓 وقت البداية والنهاية',callback_data=f'hw|field|{tid}|window')],
+            [B('⏳ تمديد الجميع 24 ساعة',callback_data=f'hw|extendall|{tid}|24'),B('⏳ 48 ساعة',callback_data=f'hw|extendall|{tid}|48')],
+            [B('📜 سجل التعديلات',callback_data=f'hw|audit|{tid}')],
             [B('🔒 إغلاق',callback_data=f'hw|close|{tid}'),B('🔓 فتح 24 ساعة',callback_data=f'hw|reopen|{tid}')],
             [B('👥 الطلاب والتسليمات',callback_data=f'hw|students|{tid}|0'),B('➕ إضافة طالب',callback_data=f'hw|field|{tid}|add')],
             [B('🖼 استبدال مرفق الواجب',callback_data=f'hw|field|{tid}|media')],
@@ -150,15 +187,42 @@ def install(ns,db,prefix):
                 if not r:raise ValueError('الطالب غير مكلّف بالواجب.')
                 kb=[[B(f'تمديد {h} ساعة',callback_data=f'hw|extend|{tid}|{uid}|{h}') for h in (6,24,48)],
                     [B('⭐ XP مخصص',callback_data=f'hw|field|{tid}|bonus|{uid}'),B('📊 الدرجة',callback_data=f'hw|field|{tid}|grade|{uid}')],
+                    [B('🛡 إعفاء من إنذار هذا الواجب',callback_data=f'hw|waive|{tid}|{uid}')],
                     [B('🚫 إلغاء تكليفه',callback_data=f'hw|remove|{tid}|{uid}')],back(tid)]
                 await safe_panel(q,f"👤 {r['full_name']}\nالتسليم: {'تم' if r['submitted_at'] else 'لم يسلم'}\nالدرجة: {r.get('grade')}",K(kb))
+            elif action=='extendall':
+                h=int(bits[3])
+                if h not in (24,48):raise ValueError('مدة غير صالحة.')
+                await sql(f'''UPDATE {p}_tasks SET deadline=GREATEST(deadline,CURRENT_TIMESTAMP)+(%s||' hours')::INTERVAL,
+                    closed=FALSE,homework_manual_closed=FALSE,retired_obligation=FALSE,
+                    teacher_deadline_reminder_sent=FALSE WHERE id=%s AND kind='homework';''',(h,tid),write=True)
+                removed = await clear_extended_warnings(tid)
+                await sql(f"INSERT INTO {p}_audit(actor_id,action,details) VALUES(%s,'homework_extend_all',%s);",
+                    (actor,f'task={tid};hours={h};warnings_cleared_for={removed}'),write=True)
+                await panel(q,tid)
+            elif action=='audit':
+                rows=await sql(f'''SELECT actor_id,action,details,created_at FROM {p}_audit
+                    WHERE details LIKE %s ORDER BY id DESC LIMIT 15;''',(f'%task={tid}%',))
+                lines=['📜 آخر تعديلات الواجب']+[f"{r['created_at'].astimezone(ZONE):%d/%m %H:%M} | {r['action']} | {r['actor_id']}" for r in rows]
+                await safe_panel(q,'\n'.join(lines),K([back(tid)]))
+            elif action=='waive':
+                student_id=int(bits[3])
+                result=await db.v43_clear_task_warnings(tid,student_id,actor,True)
+                await q.message.reply_text(f"🛡 تم إعفاء الطالب من إنذار هذا الواجب. الإنذارات المتبقية: {result['warnings']}.")
             elif action=='extend':
                 uid,h=map(int,bits[3:5])
                 if h not in (6,24,48):raise ValueError('مدة غير صالحة.')
+                # Extension is cumulative from the later of task deadline, prior
+                # individual extension or current time. Never shorten a student's window.
                 await sql(f'''INSERT INTO {p}_task_extensions(task_id,user_id,extended_until)
-                    SELECT %s,user_id,%s FROM {p}_task_students WHERE task_id=%s AND user_id=%s
-                    ON CONFLICT(task_id,user_id) DO UPDATE SET extended_until=EXCLUDED.extended_until;''',(tid,datetime.now(ZONE)+timedelta(hours=h),tid,uid),write=True)
-                await q.message.reply_text('✅ تم التمديد للطالب. إذا كان الواجب مغلقاً يدوياً، افتحه أولاً.')
+                    SELECT %s,ts.user_id,GREATEST(t.deadline,CURRENT_TIMESTAMP,
+                        COALESCE(e.extended_until,t.deadline))+(%s||' hours')::INTERVAL
+                    FROM {p}_task_students ts JOIN {p}_tasks t ON t.id=ts.task_id
+                    LEFT JOIN {p}_task_extensions e ON e.task_id=ts.task_id AND e.user_id=ts.user_id
+                    WHERE ts.task_id=%s AND ts.user_id=%s
+                    ON CONFLICT(task_id,user_id) DO UPDATE SET extended_until=EXCLUDED.extended_until;''',(tid,h,tid,uid),write=True)
+                removed = await clear_extended_warnings(tid,uid)
+                await q.message.reply_text('✅ تم تمديد الطالب من موعده الحالي وسحب إنذارات عدم التسليم الآلية لهذا الواجب.' if removed else '✅ تم تمديد الطالب. لا توجد إنذارات آلية لسحبها. إذا كان الواجب مغلقاً يدوياً افتحه أولاً.')
             elif action=='remove':
                 token=secrets.token_hex(8);context.user_data['hw_confirm']=(token,tid,int(bits[3]),'remove')
                 await safe_panel(q,'تأكيد إلغاء تكليف الطالب؟ تبقى إجابته ونقاطه محفوظة.',K([[B('تأكيد',callback_data=f'hw|confirm|{tid}|{token}')],back(tid)]))
@@ -179,7 +243,9 @@ def install(ns,db,prefix):
             elif action=='close':
                 await sql(f'UPDATE {p}_tasks SET homework_manual_closed=TRUE,closed=TRUE WHERE id=%s;',(tid,),write=True);await panel(q,tid)
             elif action=='reopen':
-                now=datetime.now(ZONE);await sql(f'UPDATE {p}_tasks SET retired_obligation=FALSE,homework_manual_closed=FALSE,closed=FALSE,homework_opens_at=%s,deadline=%s WHERE id=%s;',(now,now+timedelta(days=1),tid),write=True);await panel(q,tid)
+                now=datetime.now(ZONE);await sql(f'UPDATE {p}_tasks SET retired_obligation=FALSE,homework_manual_closed=FALSE,closed=FALSE,homework_opens_at=%s,deadline=%s WHERE id=%s;',(now,now+timedelta(days=1),tid),write=True)
+                await clear_extended_warnings(tid)
+                await panel(q,tid)
             elif action=='field':
                 if q.message.chat.type!='private':raise ValueError('افتح إدارة الواجبات في خاص البوت لتعديل الحقول.')
                 field=bits[3];prompts={'media':'أرسل صورة أو PDF أو فيديو بديل. سيحل محل مرفقات الواجب الحالية داخل البوت.', 'title':'أرسل عنوان الواجب.','text_content':'أرسل النص الجديد؛ المرفقات الحالية تبقى كما هي.','xp_reward':'أرسل مكافأة التسليم من 0 إلى 1000. تخص التسليمات اللاحقة فقط.','window':'أرسل البداية والنهاية بتوقيت بغداد:\n08/10/2026 18:00 | 09/10/2026 18:00','add':'أرسل معرف الطالب ID.','bonus':'أرسل مكافأة الأستاذ من 0 إلى 1000. تعدّل المكافأة السابقة ولا تتكرر.','grade':'أرسل الدرجة من 0 إلى 100.'}
@@ -220,6 +286,7 @@ def install(ns,db,prefix):
                 a,b=[datetime.strptime(v.strip(),'%d/%m/%Y %H:%M').replace(tzinfo=ZONE) for v in parts]
                 if b<=a or b<=datetime.now(ZONE):raise ValueError('النهاية يجب أن تكون بعد البداية وفي المستقبل.')
                 await sql(f'UPDATE {p}_tasks SET homework_opens_at=%s,deadline=%s,closed=FALSE,homework_manual_closed=FALSE,retired_obligation=FALSE WHERE id=%s;',(a,b,tid),write=True)
+                await clear_extended_warnings(tid)
             else:
                 value=int(text)
                 if field=='add':

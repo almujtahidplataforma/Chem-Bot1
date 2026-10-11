@@ -1,3 +1,5 @@
+> **تحديث V9 للكيمياء:** راجع [CHEMISTRY_V9_FULL_UPDATE_AR.md](CHEMISTRY_V9_FULL_UPDATE_AR.md) للتغييرات وطريقة التثبيت وفحص التوبكات.
+
 # أحدث إصلاح: إنذارات الواجبات
 
 راجع [WARNING_FIX.md](WARNING_FIX.md) للتحديث وطريقة الإلغاء.
