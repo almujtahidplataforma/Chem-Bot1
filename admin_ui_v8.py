@@ -11,10 +11,10 @@ LOG = logging.getLogger(__name__)
 # One canonical destination per operation. Subject-specific links are built in
 # make_sections(), rather than copying Biology callback IDs to English.
 def make_sections(subject):
-    if subject not in {'chemistry', 'english'}:
+    if subject not in {'arabic', 'english'}:
         raise ValueError('Unsupported subject')
-    prefix = 'chem6' if subject == 'chemistry' else 'eng6'
-    chapter = 'الفصول' if subject == 'chemistry' else 'اليونتات'
+    prefix = 'ar6' if subject == 'arabic' else 'eng6'
+    chapter = 'الفصول' if subject == 'arabic' else 'اليونتات'
     sections = {
         'home': [
             [('👥 الدورة والطلاب', 'v8|course'), ('📝 الامتحانات', 'v8|exams')],
@@ -56,6 +56,8 @@ def make_sections(subject):
             [('🩺 فحص جاهزية النظام', 'v8|health')],
         ],
     }
+    if subject == 'arabic':
+        sections['settings'].append([('👑 إدارة الأدمن بالآيدي', 'manual_admin_help')])
     if subject == 'english':
         sections['settings'].insert(2, [('🧵 فحص توبكات حلول الطلاب', 'eng6|topiccheck')])
     return sections
@@ -83,7 +85,7 @@ def install(ns, db, subject):
     sections = make_sections(subject)
     B, K = ns['InlineKeyboardButton'], ns['InlineKeyboardMarkup']
     is_admin = ns['is_admin']
-    subject_name = 'الكيمياء' if subject == 'chemistry' else 'الإنكليزي'
+    subject_name = 'اللغة العربية' if subject == 'arabic' else 'الإنكليزي'
     old_menu = ns['main_menu']
     old_button = ns['button_handler']
 
@@ -141,7 +143,7 @@ def install(ns, db, subject):
         topic_id = int(ns.get('SCHOOL_REVIEW_TOPIC_ID') or 0)
         notes.append(f"{'🟢' if topic_id else '🟠'} توبك مراجعة المدرسة: " +
                      (str(topic_id) if topic_id else 'لم يُحدد'))
-        if subject in ('chemistry', 'english'):
+        if subject in ('french', 'arabic', 'english'):
             for key, label in (('EXAM_SUBMISSIONS_CHAT_ID', 'الامتحانات'),
                                ('HOMEWORK_SUBMISSIONS_CHAT_ID', 'الواجبات')):
                 cid = int(ns.get(key) or 0)
@@ -189,7 +191,7 @@ def install(ns, db, subject):
         data = str(q.data or '')
         uid = q.from_user.id
         alias = ALIASES.get(data)
-        if data in ('menu', 'chem6|hub', 'eng6|hub') and is_admin(uid):
+        if data in ('menu', 'ar6|hub', 'eng6|hub') and is_admin(uid):
             alias = 'home'
         if data.startswith('v8|') or alias:
             if not is_admin(uid):
@@ -202,7 +204,7 @@ def install(ns, db, subject):
             # Only navigation cancels incomplete editing sessions; all legacy
             # callbacks continue through their own handlers unchanged.
             for state in ('control_session', 'control_input', 'preview_student',
-                          'hw_edit', 'hw_confirm', 'chem6_input', 'eng6_input',
+                          'hw_edit', 'hw_confirm', 'ar6_input', 'eng6_input',
                           'resource_publish_draft', 'v29_publish', 'linked_exam'):
                 context.user_data.pop(state, None)
             try:

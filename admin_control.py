@@ -13,33 +13,37 @@ def numbers(text):
     return sorted({int(v.strip()) for v in text.replace('+',',').split(',') if v.strip()})
 
 
-def course_plan(catalog, chapter, lecture, first_date, days):
+def course_plan(catalog, chapter, lecture, first_date, days, counts=None):
+    from course_schedule_v10 import pack_lessons
     days=set(days)
-    if not days or not days<=set(range(7)):raise ValueError('اختر يوماً واحداً على الأقل.')
     if first_date.weekday() not in days:raise ValueError('تاريخ البداية يجب أن يكون ضمن أيام الدراسة المحددة.')
     groups=catalog.get(chapter,[])
-    start=next((i for i,group in enumerate(groups) if lecture in group),None)
-    if start is None:raise ValueError('المحاضرة ليست ضمن التحاضير؛ عدل مجموعات المحاضرات أولاً.')
-    result=[];cursor=first_date
+    start=next((i for i,g in enumerate(groups) if lecture in g),None)
+    if start is None:raise ValueError('المحاضرة غير موجودة في التحاضير.')
+    rows=[]
     for ch in sorted(catalog):
         if ch<chapter:continue
-        for index,group in enumerate(catalog[ch]):
-            if ch==chapter and index<start:continue
-            selected=[n for n in group if n>=lecture] if ch==chapter and index==start else list(group)
-            if not selected:continue
-            result.append((ch,index+1,','.join(map(str,selected)),cursor))
-            cursor+=timedelta(days=1)
-            while cursor.weekday() not in days:cursor+=timedelta(days=1)
-    if not result:raise ValueError('الجدول فارغ.')
+        for i,group in enumerate(catalog[ch]):
+            if ch==chapter and i<start:continue
+            selected=[n for n in group if n>=lecture] if ch==chapter and i==start else group
+            if selected:rows.append(dict(chapter=ch,prep_no=len(rows)+1,lectures=','.join(map(str,selected))))
+    if not rows:raise ValueError('الجدول فارغ.')
+    bundles=pack_lessons(rows,first_date,days,counts)
+    # Keep the source catalog number for compatibility with existing admin screens.
+    result=[]
+    for bundle in bundles:
+        ch=bundle['chapter'];first=int(bundle['lectures'].split(',')[0])
+        pno=next(i+1 for i,g in enumerate(catalog[ch]) if first in g)
+        result.append((ch,pno,bundle['lectures'],bundle['target_date']))
     return result
 
 
 def migrate(db):
     with db.connect() as conn,conn.cursor() as cur:
-        cur.execute('''ALTER TABLE chemistry_preparations ADD COLUMN IF NOT EXISTS title TEXT NOT NULL DEFAULT '',
+        cur.execute('''ALTER TABLE arabic_preparations ADD COLUMN IF NOT EXISTS title TEXT NOT NULL DEFAULT '',
             ADD COLUMN IF NOT EXISTS needs_announcement BOOLEAN NOT NULL DEFAULT FALSE;
-        ALTER TABLE chemistry_preparation_catalog_overrides ADD COLUMN IF NOT EXISTS title TEXT NOT NULL DEFAULT '';
-        CREATE TABLE IF NOT EXISTS chemistry_course_schedule_history(
+        ALTER TABLE arabic_preparation_catalog_overrides ADD COLUMN IF NOT EXISTS title TEXT NOT NULL DEFAULT '';
+        CREATE TABLE IF NOT EXISTS arabic_course_schedule_history(
             id BIGSERIAL PRIMARY KEY,actor_id BIGINT NOT NULL,rows JSONB NOT NULL,
             created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP);''')
         conn.commit()
@@ -50,26 +54,26 @@ async def rebuild_course(db,rows,days,actor):
     if not rows:raise ValueError('الجدول فارغ.')
     def op():
         with db.connect() as conn,conn.cursor() as cur:
-            cur.execute('LOCK TABLE chemistry_preparations IN EXCLUSIVE MODE;')
-            cur.execute('SELECT COALESCE(MAX(prep_no),0) AS n FROM chemistry_preparations;');last=cur.fetchone()['n']
-            cur.execute('INSERT INTO chemistry_course_schedule_history(actor_id,rows) SELECT %s,COALESCE(jsonb_agg(to_jsonb(p)),\'[]\'::jsonb) FROM chemistry_preparations p;',(actor,))
-            cur.execute('SELECT chapter,prep_no,title FROM chemistry_preparation_catalog_overrides;')
+            cur.execute('LOCK TABLE arabic_preparations IN EXCLUSIVE MODE;')
+            cur.execute('SELECT COALESCE(MAX(prep_no),0) AS n FROM arabic_preparations;');last=cur.fetchone()['n']
+            cur.execute('INSERT INTO arabic_course_schedule_history(actor_id,rows) SELECT %s,COALESCE(jsonb_agg(to_jsonb(p)),\'[]\'::jsonb) FROM arabic_preparations p;',(actor,))
+            cur.execute('SELECT chapter,prep_no,title FROM arabic_preparation_catalog_overrides;')
             titles={(r['chapter'],r['prep_no']):r['title'] for r in cur.fetchall()}
-            cur.execute('DELETE FROM chemistry_preparations;')
+            cur.execute('DELETE FROM arabic_preparations;')
             today=datetime.now(ZONE).date()
             for offset,(ch,pno,lectures,day) in enumerate(rows,1):
-                cur.execute('''INSERT INTO chemistry_preparations(prep_no,chapter,chapter_prep_no,lectures,target_date,title,published,published_at,needs_announcement)
+                cur.execute('''INSERT INTO arabic_preparations(prep_no,chapter,chapter_prep_no,lectures,target_date,title,published,published_at,needs_announcement)
                     VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s);''',
                     (last+offset,ch,pno,lectures,day,titles.get((ch,pno),''),day<=today,
                      datetime.combine(day,datetime.min.time(),ZONE) if day<=today else None,day<=today))
             # Old early-unlock pointers must not override the replacement calendar.
-            cur.execute("DELETE FROM chemistry_early_preparation_unlocks WHERE study_track='course' AND completed_at IS NULL;")
-            cur.execute('''UPDATE chemistry_students SET current_chapter=%s,start_chapter=%s,start_prep_no=%s,
+            cur.execute("DELETE FROM arabic_early_preparation_unlocks WHERE study_track='course' AND completed_at IS NULL;")
+            cur.execute('''UPDATE arabic_students SET current_chapter=%s,start_chapter=%s,start_prep_no=%s,
                 track_started_on=GREATEST(COALESCE(track_started_on,%s),%s),study_days=%s
                 WHERE study_track='course';''',(rows[0][0],rows[0][0],rows[0][1],rows[0][3],rows[0][3],sorted(days)))
             for key,value in [('admin_course_calendar','1'),('admin_course_days',json.dumps(sorted(days)))]:
-                cur.execute('INSERT INTO chemistry_settings(key,value) VALUES(%s,%s) ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value;',(key,value))
-            cur.execute('INSERT INTO chemistry_audit(actor_id,action,details) VALUES(%s,%s,%s);',(actor,'course_calendar_rebuilt',f'start={rows[0]};count={len(rows)}'))
+                cur.execute('INSERT INTO arabic_settings(key,value) VALUES(%s,%s) ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value;',(key,value))
+            cur.execute('INSERT INTO arabic_audit(actor_id,action,details) VALUES(%s,%s,%s);',(actor,'course_calendar_rebuilt',f'start={rows[0]};count={len(rows)}'))
             conn.commit()
     return await db.run(op)
 
@@ -78,23 +82,23 @@ async def edit_course_row(db,pid,field,value,actor):
     if field not in {'title','lectures','target_date','chapter','delete'}:raise ValueError('حقل غير صالح.')
     def op():
         with db.connect() as conn,conn.cursor() as cur:
-            cur.execute('LOCK TABLE chemistry_preparations IN EXCLUSIVE MODE;')
-            cur.execute('SELECT * FROM chemistry_preparations WHERE prep_no=%s FOR UPDATE;',(pid,));row=cur.fetchone()
+            cur.execute('LOCK TABLE arabic_preparations IN EXCLUSIVE MODE;')
+            cur.execute('SELECT * FROM arabic_preparations WHERE prep_no=%s FOR UPDATE;',(pid,));row=cur.fetchone()
             if not row:raise ValueError('التحضير غير موجود.')
-            cur.execute('INSERT INTO chemistry_course_schedule_history(actor_id,rows) VALUES(%s,%s::jsonb);',(actor,json.dumps([row],default=str)))
-            if field=='delete':cur.execute('DELETE FROM chemistry_preparations WHERE prep_no=%s;',(pid,))
+            cur.execute('INSERT INTO arabic_course_schedule_history(actor_id,rows) VALUES(%s,%s::jsonb);',(actor,json.dumps([row],default=str)))
+            if field=='delete':cur.execute('DELETE FROM arabic_preparations WHERE prep_no=%s;',(pid,))
             elif field=='target_date':
-                cur.execute('SELECT prep_no FROM chemistry_preparations WHERE target_date=%s AND prep_no<>%s;',(value,pid))
+                cur.execute('SELECT prep_no FROM arabic_preparations WHERE target_date=%s AND prep_no<>%s;',(value,pid))
                 if cur.fetchone():raise ValueError('هذا اليوم يحتوي تحضيراً آخر. غيّر موعده أولاً أو أعد تنظيم الجدول.')
-                cur.execute('UPDATE chemistry_preparations SET target_date=%s,published=%s,published_at=%s,needs_announcement=%s WHERE prep_no=%s;',(value,value<=datetime.now(ZONE).date(),datetime.now(ZONE) if value<=datetime.now(ZONE).date() else None,value<=datetime.now(ZONE).date(),pid))
+                cur.execute('UPDATE arabic_preparations SET target_date=%s,published=%s,published_at=%s,needs_announcement=%s WHERE prep_no=%s;',(value,value<=datetime.now(ZONE).date(),datetime.now(ZONE) if value<=datetime.now(ZONE).date() else None,value<=datetime.now(ZONE).date(),pid))
             elif field=='chapter':
                 ch,pno,encoded=value
-                cur.execute('UPDATE chemistry_preparations SET chapter=%s,chapter_prep_no=%s,lectures=%s WHERE prep_no=%s;',(ch,pno,encoded,pid))
-            else:cur.execute(f'UPDATE chemistry_preparations SET {field}=%s WHERE prep_no=%s;',(value,pid))
+                cur.execute('UPDATE arabic_preparations SET chapter=%s,chapter_prep_no=%s,lectures=%s WHERE prep_no=%s;',(ch,pno,encoded,pid))
+            else:cur.execute(f'UPDATE arabic_preparations SET {field}=%s WHERE prep_no=%s;',(value,pid))
             if field in {'delete','lectures','target_date','chapter'}:
-                cur.execute("DELETE FROM chemistry_early_preparation_unlocks WHERE study_track='course' AND source_prep_id=%s AND completed_at IS NULL;",(pid,))
-            cur.execute("INSERT INTO chemistry_settings(key,value) VALUES('admin_course_calendar','1') ON CONFLICT(key) DO UPDATE SET value='1';")
-            cur.execute('INSERT INTO chemistry_audit(actor_id,action,details) VALUES(%s,%s,%s);',(actor,'course_preparation_edit',f'prep={pid};field={field}'))
+                cur.execute("DELETE FROM arabic_early_preparation_unlocks WHERE study_track='course' AND source_prep_id=%s AND completed_at IS NULL;",(pid,))
+            cur.execute("INSERT INTO arabic_settings(key,value) VALUES('admin_course_calendar','1') ON CONFLICT(key) DO UPDATE SET value='1';")
+            cur.execute('INSERT INTO arabic_audit(actor_id,action,details) VALUES(%s,%s,%s);',(actor,'course_preparation_edit',f'prep={pid};field={field}'))
             conn.commit()
     return await db.run(op)
 
@@ -103,36 +107,13 @@ async def edit_profile(db,uid,field,value,actor):
     if field not in {'full_name','school','target_grade','xp','warnings'}:raise ValueError('حقل غير صالح.')
     def op():
         with db.connect() as conn,conn.cursor() as cur:
-            cur.execute('SELECT * FROM chemistry_students WHERE user_id=%s FOR UPDATE;',(uid,));old=cur.fetchone()
+            cur.execute('SELECT * FROM arabic_students WHERE user_id=%s FOR UPDATE;',(uid,));old=cur.fetchone()
             if not old:raise ValueError('الطالب غير موجود.')
-            if field=='warnings':
-                # Editing the displayed counter alone used to resurrect removed
-                # warnings during the nightly ledger reconciliation.
-                wanted=int(value)
-                cur.execute('SELECT id,task_id FROM chemistry_warning_log WHERE user_id=%s ORDER BY created_at DESC,id DESC FOR UPDATE;',(uid,))
-                entries=cur.fetchall()
-                if wanted<len(entries):
-                    for warning in entries[:len(entries)-wanted]:
-                        if warning.get('task_id'):
-                            cur.execute("""INSERT INTO chemistry_v9_deleted_task_warnings(task_id,user_id,deleted_by)
-                                SELECT id,%s,%s FROM chemistry_tasks WHERE id=%s
-                                ON CONFLICT(task_id,user_id) DO NOTHING;""",(uid,actor,warning['task_id']))
-                        cur.execute('DELETE FROM chemistry_warning_log WHERE id=%s AND user_id=%s;',(warning['id'],uid))
-                elif wanted>len(entries):
-                    if wanted-len(entries)>20:
-                        raise ValueError('لا يمكن إضافة أكثر من 20 إنذاراً دفعة واحدة؛ استخدم إدارة الإنذارات.')
-                    for _ in range(wanted-len(entries)):
-                        cur.execute("""INSERT INTO chemistry_warning_log(user_id,task_id,reason,issued_by)
-                            VALUES(%s,NULL,'تعديل إداري لعدد الإنذارات',%s);""",(uid,actor))
-                cur.execute("""UPDATE chemistry_students SET warnings=(SELECT COUNT(*) FROM chemistry_warning_log
-                    WHERE user_id=%s) WHERE user_id=%s;""",(uid,uid))
-            else:
-                cur.execute(f'UPDATE chemistry_students SET {field}=%s WHERE user_id=%s;',(value,uid))
-
+            cur.execute(f'UPDATE arabic_students SET {field}=%s WHERE user_id=%s;',(value,uid))
             if field=='xp':
                 wallet='chapter_xp' if old.get('study_track')=='chapter' else 'course_xp'
-                cur.execute(f'UPDATE chemistry_students SET {wallet}=%s WHERE user_id=%s;',(value,uid))
-            cur.execute('INSERT INTO chemistry_audit(actor_id,action,details) VALUES(%s,%s,%s);',(actor,'admin_profile_edit',f'user={uid};field={field};old={old.get(field)};new={value}'))
+                cur.execute(f'UPDATE arabic_students SET {wallet}=%s WHERE user_id=%s;',(value,uid))
+            cur.execute('INSERT INTO arabic_audit(actor_id,action,details) VALUES(%s,%s,%s);',(actor,'admin_profile_edit',f'user={uid};field={field};old={old.get(field)};new={value}'))
             conn.commit()
     return await db.run(op)
 
@@ -181,16 +162,16 @@ def install(ns,db):
     def init_db():
         old_init();migrate(db)
         with db.connect() as conn,conn.cursor() as cur:
-            cur.execute("SELECT value FROM chemistry_settings WHERE key='admin_course_days';");row=cur.fetchone()
-            ns['_ADMIN_COURSE_DAYS']=json.loads(row['value']) if row else [1,3,6]
+            cur.execute("SELECT value FROM arabic_settings WHERE key='admin_course_days';");row=cur.fetchone()
+            ns['_ADMIN_COURSE_DAYS']=json.loads(row['value']) if row else [0,2,3]
     db.init_db=init_db;ns['init_db']=init_db
     def next_date(value,days=None):
-        allowed=set(days or ns.get('_ADMIN_COURSE_DAYS') or [1,3,6]);value+=timedelta(days=1)
+        allowed=set(days or ns.get('_ADMIN_COURSE_DAYS') or [0,2,3]);value+=timedelta(days=1)
         while value.weekday() not in allowed:value+=timedelta(days=1)
         return value
     db._next_study_date=next_date
     def previous_date(value):
-        allowed=set(ns.get('_ADMIN_COURSE_DAYS') or [1,3,6]);value-=timedelta(days=1)
+        allowed=set(ns.get('_ADMIN_COURSE_DAYS') or [0,2,3]);value-=timedelta(days=1)
         while value.weekday() not in allowed:value-=timedelta(days=1)
         return value
     db._previous_study_date=previous_date
@@ -201,11 +182,11 @@ def install(ns,db):
     db.seed_preparations=seed;ns['seed_preparations']=seed
     old_due=db.due_preparations
     async def due(now):
-        return await sql(db,"SELECT * FROM chemistry_preparations WHERE (published=FALSE OR needs_announcement=TRUE) AND ((target_date-1)+TIME '23:00')<=%s ORDER BY target_date,prep_no;",(now.astimezone(ZONE).replace(tzinfo=None),))
+        return await sql(db,"SELECT * FROM arabic_preparations WHERE (published=FALSE OR needs_announcement=TRUE) AND ((target_date-1)+TIME '23:00')<=%s ORDER BY target_date,prep_no;",(now.astimezone(ZONE).replace(tzinfo=None),))
     db.due_preparations=due;ns['due_preparations']=due
     old_mark=db.mark_preparation_published
     async def mark(pid):
-        await old_mark(pid);await sql(db,'UPDATE chemistry_preparations SET needs_announcement=FALSE WHERE prep_no=%s;',(pid,),write=True)
+        await old_mark(pid);await sql(db,'UPDATE arabic_preparations SET needs_announcement=FALSE WHERE prep_no=%s;',(pid,),write=True)
     db.mark_preparation_published=mark;ns['mark_preparation_published']=mark
     old_text=ns['preparation_text']
     def prep_text(row):return (ns['bold'](row['title'])+'\n' if row.get('title') else '')+old_text(row)
@@ -214,7 +195,7 @@ def install(ns,db):
     async def current(uid):
         row=await old_current(uid)
         if row and not row.get('title'):
-            meta=await sql(db,'SELECT title FROM chemistry_preparation_catalog_overrides WHERE chapter=%s AND prep_no=%s;',(row['chapter'],row.get('chapter_prep_no') or row.get('prep_no')),True)
+            meta=await sql(db,'SELECT title FROM arabic_preparation_catalog_overrides WHERE chapter=%s AND prep_no=%s;',(row['chapter'],row.get('chapter_prep_no') or row.get('prep_no')),True)
             if meta:row={**row,'title':meta['title']}
         return row
     db.v52_current_preparation=current
@@ -238,7 +219,7 @@ def install(ns,db):
     ns['v51_preparation_chapter']=group
 
     async def calendar(q,page=0):
-        rows=await sql(db,'SELECT * FROM chemistry_preparations ORDER BY target_date,prep_no;');page=max(0,min(page,max(0,(len(rows)-1)//10)))
+        rows=await sql(db,'SELECT * FROM arabic_preparations ORDER BY target_date,prep_no;');page=max(0,min(page,max(0,(len(rows)-1)//10)))
         buttons=[[B('🔄 إعادة التنظيم من أي محاضرة',callback_data='ctl_rebuild')],[B('➕ إضافة تحضير للدورة',callback_data='ctl_add')]]
         for r in rows[page*10:page*10+10]:buttons.append([B(f"{r['target_date']:%d/%m} | {r.get('title') or 'الفصل '+str(r['chapter'])+' م '+r['lectures'].replace(',','+')}",callback_data=f"ctl_row|{r['prep_no']}")])
         nav=[]
@@ -315,7 +296,7 @@ def install(ns,db):
         if q:q.data=data
         proxy=ActingUpdate(update,q,user,message)
         child=ContextProxy(context,s['state'],BotProxy(context.bot,uid,admin,lambda markup:rendered(markup,s)),uid)
-        await sql(db,'INSERT INTO chemistry_audit(actor_id,action,details) VALUES(%s,%s,%s);',(admin,'admin_student_action',f'user={uid};action={data or "message"}'),write=True)
+        await sql(db,'INSERT INTO arabic_audit(actor_id,action,details) VALUES(%s,%s,%s);',(admin,'admin_student_action',f'user={uid};action={data or "message"}'),write=True)
         if q:await old_button(proxy,child)
         else:await old_private(proxy,child)
         if not await db.get_student(uid):context.user_data.pop('control_session',None)
@@ -366,7 +347,7 @@ def install(ns,db):
             elif data.startswith('ctl_calendar'):
                 context.user_data.pop('control_input',None);await q.answer();await calendar(q,int(data.split('|')[1]) if '|' in data else 0);return
             elif data=='ctl_rebuild':
-                state={'kind':'rebuild'};prompt='أرسل: الفصل | أول محاضرة | تاريخ البداية | أيام الدراسة\nمثال: 3 | 5 | 08/10/2026 | الثلاثاء،الخميس،الأحد\nيمكن اختيار محاضرات أقدم أو أحدث. سأعرض الجدول للتأكيد قبل الحفظ.'
+                state={'kind':'rebuild'};prompt='أرسل: الفصل | أول محاضرة | تاريخ البداية | أيام الدراسة\nمثال: 3 | 5 | 19/10/2026 | الاثنين،الأربعاء،الخميس\nيمكن اختيار محاضرات أقدم أو أحدث. سأعرض الجدول للتأكيد قبل الحفظ.'
             elif data=='ctl_rebuild_confirm':
                 draft=context.user_data.pop('control_rebuild',None)
                 if not draft or time.monotonic()-draft['at']>900:raise ValueError('انتهت صلاحية التأكيد؛ أعد تحديد الجدول.')
@@ -378,18 +359,18 @@ def install(ns,db):
                 await q.edit_message_text('تعديل اسم التحضير ومحاضراته في الدليل والجداول:',reply_markup=menu([[B('✏️ الاسم',callback_data=f'ctl_groupfield|{ch}|{pno}|title')],[B('🎬 المحاضرات',callback_data=f'v51_prep_edit|{ch}|{pno}')]]));return
             elif data.startswith('ctl_groupfield|'):
                 _,ch,pno,field=data.split('|');state={'kind':'group_title','chapter':int(ch),'prep':int(pno)};prompt='أرسل الاسم الجديد للتحضير.'
-            elif data=='ctl_add':state={'kind':'add'};prompt='أرسل: الفصل | المحاضرات | تاريخ التحضير | اسم التحضير\nمثال: 3 | 5+6 | 08/10/2026 | مراجعة المحاضرتين'
+            elif data=='ctl_add':state={'kind':'add'};prompt='أرسل: الفصل | المحاضرات | تاريخ التحضير | اسم التحضير\nمثال: 3 | 5+6 | 09/10/2026 | مراجعة المحاضرتين'
             elif data.startswith('ctl_row|'):
-                pid=int(data.split('|')[1]);r=await sql(db,'SELECT * FROM chemistry_preparations WHERE prep_no=%s;',(pid,),True)
+                pid=int(data.split('|')[1]);r=await sql(db,'SELECT * FROM arabic_preparations WHERE prep_no=%s;',(pid,),True)
                 if not r:raise ValueError('التحضير غير موجود.')
                 await q.answer();await q.edit_message_text(f"{r['title'] or 'تحضير'}\nالفصل {r['chapter']} | {r['lectures']}\n{r['target_date']}",reply_markup=menu([[B(label,callback_data=f'ctl_rowfield|{pid}|{field}')] for field,label in [('title','✏️ الاسم'),('lectures','🎬 المحاضرات'),('chapter','📘 تغيير الفصل والمحاضرات'),('target_date','📅 التاريخ'),('delete','🗑 حذف التحضير')]]));return
             elif data.startswith('ctl_rowfield|'):
-                _,pid,field=data.split('|');r=await sql(db,'SELECT * FROM chemistry_preparations WHERE prep_no=%s;',(int(pid),),True)
+                _,pid,field=data.split('|');r=await sql(db,'SELECT * FROM arabic_preparations WHERE prep_no=%s;',(int(pid),),True)
                 if not r:raise ValueError('التحضير غير موجود.')
                 if field=='delete':
                     context.user_data['control_input']={'kind':'row_delete','id':int(pid),'at':time.monotonic()}
                     await q.answer();await q.edit_message_text('هل تؤكد حذف هذا التحضير من جدول الدورة؟ يبقى تقدم الطلاب وامتحاناتهم محفوظاً.',reply_markup=menu([[B('تأكيد الحذف',callback_data=f'ctl_delete_confirm|{pid}',style='danger')]]));return
-                state={'kind':'row','id':int(pid),'field':field,'chapter':r['chapter']};prompt='أرسل '+{'title':'الاسم الجديد.','lectures':'أرقام المحاضرات مثل 1+2+3.','target_date':'التاريخ بصيغة 08/10/2026.','chapter':'الفصل والمحاضرات بصيغة: 4 | 1+2+3'}[field]
+                state={'kind':'row','id':int(pid),'field':field,'chapter':r['chapter']};prompt='أرسل '+{'title':'الاسم الجديد.','lectures':'أرقام المحاضرات مثل 1+2+3.','target_date':'التاريخ بصيغة 09/10/2026.','chapter':'الفصل والمحاضرات بصيغة: 4 | 1+2+3'}[field]
             elif data.startswith('ctl_delete_confirm|'):
                 state=context.user_data.pop('control_input',None);pid=int(data.split('|')[1])
                 if not state or state['kind']!='row_delete' or state['id']!=pid or time.monotonic()-state['at']>900:raise ValueError('أعد تأكيد الحذف.')
@@ -442,32 +423,32 @@ def install(ns,db):
                 def op():
                     with db.connect() as conn,conn.cursor() as cur:
                         for num in nums:
-                            cur.execute('''INSERT INTO chemistry_lecture_progress(user_id,chapter,lecture,completed_at) VALUES(%s,%s,%s,%s)
+                            cur.execute('''INSERT INTO arabic_lecture_progress(user_id,chapter,lecture,completed_at) VALUES(%s,%s,%s,%s)
                                 ON CONFLICT(user_id,chapter,lecture) DO UPDATE SET completed_at=EXCLUDED.completed_at;''',(s['uid'],ch,num,datetime.now(ZONE) if status=='مكتمل' else None))
-                        cur.execute('DELETE FROM chemistry_lecture_reviews WHERE user_id=%s AND chapter=%s AND lecture=ANY(%s);',(s['uid'],ch,nums))
-                        cur.execute('INSERT INTO chemistry_audit(actor_id,action,details) VALUES(%s,%s,%s);',(uid,'admin_lecture_progress',f'user={s["uid"]};chapter={ch};lectures={nums};status={status}'));conn.commit()
+                        cur.execute('DELETE FROM arabic_lecture_reviews WHERE user_id=%s AND chapter=%s AND lecture=ANY(%s);',(s['uid'],ch,nums))
+                        cur.execute('INSERT INTO arabic_audit(actor_id,action,details) VALUES(%s,%s,%s);',(uid,'admin_lecture_progress',f'user={s["uid"]};chapter={ch};lectures={nums};status={status}'));conn.commit()
                 await db.run(op)
             elif kind=='parent':
                 remove=text.startswith('حذف');parent=int(text.replace('حذف','').strip())
                 if parent<=0 or (not remove and (ns['is_admin'](parent) or await db.get_student(parent))):raise ValueError('اختر ID ولي أمر صحيح لا يملك حساب طالب أو أدمن.')
                 def op():
                     with db.connect() as conn,conn.cursor() as cur:
-                        cur.execute('SELECT user_id FROM chemistry_students WHERE user_id=%s FOR UPDATE;',(s['uid'],))
+                        cur.execute('SELECT user_id FROM arabic_students WHERE user_id=%s FOR UPDATE;',(s['uid'],))
                         if not cur.fetchone():raise ValueError('الطالب غير موجود.')
-                        if remove:cur.execute('DELETE FROM chemistry_parent_links WHERE student_id=%s AND parent_chat_id=%s;',(s['uid'],parent))
-                        else:cur.execute('INSERT INTO chemistry_parent_links(student_id,parent_chat_id,approved) VALUES(%s,%s,TRUE) ON CONFLICT(student_id,parent_chat_id) DO UPDATE SET approved=TRUE;',(s['uid'],parent))
-                        cur.execute('SELECT * FROM chemistry_parent_links WHERE student_id=%s AND approved=TRUE ORDER BY linked_at LIMIT 1;',(s['uid'],));p=cur.fetchone() or {}
-                        cur.execute('UPDATE chemistry_students SET parent_chat_id=%s,parent_approved=%s,parent_full_name=%s,parent_username=%s WHERE user_id=%s;',(p.get('parent_chat_id'),bool(p),p.get('parent_full_name'),p.get('parent_username'),s['uid']))
-                        cur.execute('INSERT INTO chemistry_audit(actor_id,action,details) VALUES(%s,%s,%s);',(uid,'admin_parent_link',f'user={s["uid"]};parent={parent};remove={remove}'));conn.commit()
+                        if remove:cur.execute('DELETE FROM arabic_parent_links WHERE student_id=%s AND parent_chat_id=%s;',(s['uid'],parent))
+                        else:cur.execute('INSERT INTO arabic_parent_links(student_id,parent_chat_id,approved) VALUES(%s,%s,TRUE) ON CONFLICT(student_id,parent_chat_id) DO UPDATE SET approved=TRUE;',(s['uid'],parent))
+                        cur.execute('SELECT * FROM arabic_parent_links WHERE student_id=%s AND approved=TRUE ORDER BY linked_at LIMIT 1;',(s['uid'],));p=cur.fetchone() or {}
+                        cur.execute('UPDATE arabic_students SET parent_chat_id=%s,parent_approved=%s,parent_full_name=%s,parent_username=%s WHERE user_id=%s;',(p.get('parent_chat_id'),bool(p),p.get('parent_full_name'),p.get('parent_username'),s['uid']))
+                        cur.execute('INSERT INTO arabic_audit(actor_id,action,details) VALUES(%s,%s,%s);',(uid,'admin_parent_link',f'user={s["uid"]};parent={parent};remove={remove}'));conn.commit()
                 await db.run(op)
             elif kind=='group_title':
                 if len(text)>150:raise ValueError('الاسم أطول من 150 حرفاً.')
                 ch,pno=state['chapter'],state['prep'];nums=ns['CHAPTER_PREPARATION_DISTRIBUTION'][ch][pno-1]
                 def op():
                     with db.connect() as conn,conn.cursor() as cur:
-                        cur.execute('''INSERT INTO chemistry_preparation_catalog_overrides(chapter,prep_no,lectures,title,updated_by)
+                        cur.execute('''INSERT INTO arabic_preparation_catalog_overrides(chapter,prep_no,lectures,title,updated_by)
                             VALUES(%s,%s,%s,%s,%s) ON CONFLICT(chapter,prep_no) DO UPDATE SET title=EXCLUDED.title,updated_by=EXCLUDED.updated_by,updated_at=CURRENT_TIMESTAMP;''',(ch,pno,','.join(map(str,nums)),text,uid))
-                        cur.execute('UPDATE chemistry_preparations SET title=%s WHERE chapter=%s AND chapter_prep_no=%s;',(text,ch,pno));conn.commit()
+                        cur.execute('UPDATE arabic_preparations SET title=%s WHERE chapter=%s AND chapter_prep_no=%s;',(text,ch,pno));conn.commit()
                 await db.run(op)
             elif kind=='row':
                 field=state['field'];value=text
@@ -486,14 +467,14 @@ def install(ns,db):
                 if day<datetime.now(ZONE).date() or not title or len(title)>150:raise ValueError('تأكد من التاريخ واسم التحضير.')
                 def op():
                     with db.connect() as conn,conn.cursor() as cur:
-                        cur.execute('LOCK TABLE chemistry_preparations IN EXCLUSIVE MODE;')
-                        cur.execute('SELECT 1 FROM chemistry_preparations WHERE target_date=%s;',(day,))
+                        cur.execute('LOCK TABLE arabic_preparations IN EXCLUSIVE MODE;')
+                        cur.execute('SELECT 1 FROM arabic_preparations WHERE target_date=%s;',(day,))
                         if cur.fetchone():raise ValueError('اليوم مستخدم؛ عدل محاضرات تحضيره بدلاً من إضافة تحضير آخر.')
-                        cur.execute('SELECT COALESCE(MAX(prep_no),0)+1 AS n FROM chemistry_preparations;');pid=cur.fetchone()['n']
+                        cur.execute('SELECT COALESCE(MAX(prep_no),0)+1 AS n FROM arabic_preparations;');pid=cur.fetchone()['n']
                         pno=next((i for i,g in enumerate(ns['CHAPTER_PREPARATION_DISTRIBUTION'][ch],1) if nums[0] in g),1)
-                        cur.execute('INSERT INTO chemistry_preparations(prep_no,chapter,chapter_prep_no,lectures,target_date,title,published,published_at,needs_announcement) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s);',(pid,ch,pno,','.join(map(str,nums)),day,title,day<=datetime.now(ZONE).date(),datetime.now(ZONE) if day<=datetime.now(ZONE).date() else None,day<=datetime.now(ZONE).date()))
-                        cur.execute("INSERT INTO chemistry_settings(key,value) VALUES('admin_course_calendar','1') ON CONFLICT(key) DO UPDATE SET value='1';")
-                        cur.execute('INSERT INTO chemistry_audit(actor_id,action,details) VALUES(%s,%s,%s);',(uid,'admin_course_add',str(pid)));conn.commit()
+                        cur.execute('INSERT INTO arabic_preparations(prep_no,chapter,chapter_prep_no,lectures,target_date,title,published,published_at,needs_announcement) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s);',(pid,ch,pno,','.join(map(str,nums)),day,title,day<=datetime.now(ZONE).date(),datetime.now(ZONE) if day<=datetime.now(ZONE).date() else None,day<=datetime.now(ZONE).date()))
+                        cur.execute("INSERT INTO arabic_settings(key,value) VALUES('admin_course_calendar','1') ON CONFLICT(key) DO UPDATE SET value='1';")
+                        cur.execute('INSERT INTO arabic_audit(actor_id,action,details) VALUES(%s,%s,%s);',(uid,'admin_course_add',str(pid)));conn.commit()
                 await db.run(op)
             else:raise ValueError('استخدم زر التأكيد.')
             context.user_data.pop('control_input',None)

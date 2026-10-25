@@ -32,7 +32,7 @@ from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
 
 from database import DATABASE_URL
-from data import CHAPTER_PREPARATION_DISTRIBUTION, NEXT_PREPARATIONS, PLAYLISTS, PREPARATIONS
+from data import page_button_target, CHAPTER_NAMES, CHAPTER_COUNT, CHAPTER_PREPARATION_DISTRIBUTION, LECTURE_SUPPLEMENTS, NEXT_PREPARATIONS, PLAYLISTS, PREPARATIONS
 from database import (
     add_archive_exam_media, add_pending_media_by_id, add_resource_media, add_submission_review_message, add_task_media_by_id, add_warning, add_warning_once, all_students_admin_view, all_preparations, append_pending_media,
     add_extra_preparation, adjust_xp, approved_students, approve_parent, archive_exams, archive_exams_by_lecture, archive_lectures, award_daily_preparation, buy_remove_warning, close_task, complete_backlog, confirm_pending_task, create_archive_exam, create_extension_request, create_leave_request, create_parent_leave, create_pending_task, decide_exam_access, decide_extension_request, decide_leave_request, due_exam_reminders,
@@ -61,7 +61,7 @@ def _env_bool(name,default=False):
     return str(value).strip().lower() in {'1','true','yes','on','enabled'}
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
-logger = logging.getLogger("chemistry_bot")
+logger = logging.getLogger("arabic_bot")
 
 PRIVATE_STUDY_OATH = "اقسم بالله العظيم اني قد درست هذه المحاضرة على مصدري الخاص بالتمام والكمال وانا غير مبرئ الذمة في حال كذبت في قولي هذا"
 ROYAL_REVIEW_OATH = "اقسم بالله العظيم اني قد راجعت هذه المحاضرة بالتمام والكمال واني غير مبرئ الذمة في حال كذبت في قولي"
@@ -70,7 +70,7 @@ SCHOOL_REVIEW_OATH = "اقسم بالله العظيم اني قد اكملت م
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 TIMEZONE = ZoneInfo(os.getenv("TIMEZONE", "Asia/Baghdad"))
-CHEMISTRY_GROUP_ID = _env_int("CHEMISTRY_GROUP_ID")
+ARABIC_GROUP_ID = _env_int("ARABIC_GROUP_ID")
 PREPARATION_TOPIC_ID = _env_int("PREPARATION_TOPIC_ID")
 HOMEWORK_TOPIC_ID = _env_int("HOMEWORK_TOPIC_ID")
 EXAM_TOPIC_ID = _env_int("EXAM_TOPIC_ID")
@@ -88,9 +88,10 @@ REQUIRED_CHANNEL = os.getenv("REQUIRED_CHANNEL", "@almujtahid_platform")
 REQUIRED_CHANNEL_URL = os.getenv("REQUIRED_CHANNEL_URL", "https://t.me/almujtahid_platform")
 ADMIN_IDS = {int(x.strip()) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip().isdigit()}
 FOUNDER_IDS = {int(x.strip()) for x in os.getenv("FOUNDER_IDS", "").split(",") if x.strip().isdigit()}
-DEFAULT_HOMEWORK_HOURS = _env_int("DEFAULT_HOMEWORK_HOURS",24)
+MANUAL_ADMIN_IDS = set()
+DEFAULT_HOMEWORK_HOURS = 48
 DEFAULT_EXAM_HOURS = 24
-MAX_WARNINGS = 5
+MAX_WARNINGS = 10
 CHAMPIONS_TOPIC_ID=_env_int("CHAMPIONS_TOPIC_ID",11)
 WARNINGS_TOPIC_ID=_env_int("WARNINGS_TOPIC_ID",9)
 MIN_LECTURE_WATCH_MINUTES=max(30,_env_int("MIN_LECTURE_WATCH_MINUTES",30))
@@ -100,7 +101,7 @@ _OWNER_ERROR_ALERT_AT=0.0
 
 REG_NAME, REG_SCHOOL, REG_GRADE, REG_JOIN = range(4)
 DIV = "━━━━━━━━━━━━━━━━━━"
-BUILD_VERSION = "chemistry-v9-full-feature-parity-20261011"
+BUILD_VERSION = "arabic-v1.3-sibling-parity-20261026"
 NEON_ECO_MODE=_env_bool("NEON_ECO_MODE",True)
 NEON_ECO_INTERVAL_SECONDS=max(900,_env_int("NEON_ECO_INTERVAL_SECONDS",1800))
 NEON_BACKGROUND_INTERVAL_SECONDS=max(3600,_env_int("NEON_BACKGROUND_INTERVAL_SECONDS",21600))
@@ -110,9 +111,9 @@ DELETE_STUDENT_ANSWER_AFTER_DELIVERY=_env_bool("DELETE_STUDENT_ANSWER_AFTER_DELI
 ANSWER_CLEANUP_LOOKBACK_DAYS=max(1,min(31,_env_int("ANSWER_CLEANUP_LOOKBACK_DAYS",7)))
 TELEGRAM_DELETE_LIMIT_HOURS=max(1,min(47,_env_int("TELEGRAM_DELETE_LIMIT_HOURS",47)))
 try:
-    EXAM_ENFORCEMENT_START_DATE=date.fromisoformat(os.getenv("EXAM_ENFORCEMENT_START_DATE_V46","2026-09-07"))
+    EXAM_ENFORCEMENT_START_DATE=date.fromisoformat(os.getenv("EXAM_ENFORCEMENT_START_DATE_V46","2026-10-19"))
 except ValueError:
-    EXAM_ENFORCEMENT_START_DATE=date(2026,9,7)
+    EXAM_ENFORCEMENT_START_DATE=date(2026,10,19)
 try:
     LATE_EXAM_XP_COST=max(0,int(os.getenv("LATE_EXAM_XP_COST","150") or 150))
 except ValueError:
@@ -150,11 +151,11 @@ def InlineKeyboardButton(text,*args,**kwargs):
 def build_personal_plan(start_chapter,start_date):
     """Build the student's plan using the approved preparation distribution."""
     rows=[]; cursor=start_date
-    for chapter in range(start_chapter,8):
+    for chapter in range(start_chapter,CHAPTER_COUNT+1):
         groups=CHAPTER_PREPARATION_DISTRIBUTION.get(chapter, [])
         if not groups:
             continue
-        allowed={6,0,1,2,3} if chapter==1 else ({6,0,1,3} if chapter==2 else {6,1,3})
+        allowed={0,2,4,5}  # الاثنين والأربعاء والجمعة والسبت
         for prep_no,nums in enumerate(groups,1):
             # Keep the previous weekday rules; only the lecture grouping is changed.
             while cursor.weekday() not in allowed:
@@ -165,16 +166,14 @@ def build_personal_plan(start_chapter,start_date):
 
 def onboarding_track_keyboard():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📘 الفصل 1",callback_data="onboardtrack|1"),InlineKeyboardButton("📗 الفصل 2",callback_data="onboardtrack|2")],
-        [InlineKeyboardButton("📙 الفصل 3",callback_data="onboardtrack|3"),InlineKeyboardButton("📕 الفصل 4",callback_data="onboardtrack|4")],
-        [InlineKeyboardButton("📒 الفصل 5",callback_data="onboardtrack|5"),InlineKeyboardButton("📓 الفصل 6",callback_data="onboardtrack|6")],
-        [InlineKeyboardButton("📔 الفصل 7",callback_data="onboardtrack|7")],
-        [InlineKeyboardButton("👥 أكمل مع الدورة الحالية",callback_data="onboardtrack|course")],
+        [InlineKeyboardButton(f'📘 {CHAPTER_NAMES[1]}',callback_data='onboardtrack|1'),InlineKeyboardButton(f'📗 {CHAPTER_NAMES[2]}',callback_data='onboardtrack|2')],
+        [InlineKeyboardButton(f'📙 {CHAPTER_NAMES[3]}',callback_data='onboardtrack|3'),InlineKeyboardButton(f'📕 {CHAPTER_NAMES[4]}',callback_data='onboardtrack|4')],
+        [InlineKeyboardButton(f'📒 {CHAPTER_NAMES[5]}',callback_data='onboardtrack|5'),InlineKeyboardButton(f'📓 {CHAPTER_NAMES[6]}',callback_data='onboardtrack|6')],
+        [InlineKeyboardButton('👥 أكمل مع الدورة الحالية',callback_data='onboardtrack|course')],
     ])
 
-
 async def show_onboarding_track(message_or_query,edit=False):
-    text=bold("📚 اختر مسار دراستك\n\nاختر الفصل الذي تريد أن تبدأ منه، أو اختر «أكمل مع الدورة» حتى تستمر مع تحاضير وواجبات وامتحانات الدورة الحالية كما كانت قبل التحديث.")
+    text=bold("📚 اختر مسار دراستك\n\nاختر الباب الذي تريد أن تبدأ منه، أو اختر «أكمل مع الدورة» حتى تستمر مع تحاضير وواجبات وامتحانات الدورة الحالية كما كانت قبل التحديث.")
     if edit: await message_or_query.edit_message_text(text,parse_mode=ParseMode.HTML,reply_markup=onboarding_track_keyboard())
     else: await message_or_query.reply_text(text,parse_mode=ParseMode.HTML,reply_markup=onboarding_track_keyboard())
 
@@ -184,7 +183,11 @@ def bold(text):
 
 
 def is_admin(user_id):
-    return user_id==OWNER_CHAT_ID or user_id in ADMIN_IDS or user_id in FOUNDER_IDS
+    return user_id==OWNER_CHAT_ID or user_id in ADMIN_IDS or user_id in FOUNDER_IDS or user_id in MANUAL_ADMIN_IDS
+
+
+def can_manage_admins(user_id):
+    return bool(user_id and (user_id==OWNER_CHAT_ID or user_id in FOUNDER_IDS or user_id in ADMIN_IDS))
 
 
 def main_menu(admin=False):
@@ -221,7 +224,7 @@ def parent_menu(students):
             [InlineKeyboardButton("🏅 إنجازات هذا الأسبوع",callback_data=f"parentachievements|{sid}"),InlineKeyboardButton("⚠️ الإنذارات",callback_data=f"parentwarnings|{sid}")],
             [InlineKeyboardButton("🏖 طلب إجازة للطالب",callback_data=f"parentleave|{sid}")],
         ])
-    rows.append([InlineKeyboardButton('🗑 حذف حسابي',callback_data='parent_delete',style='danger')])
+    rows.append([InlineKeyboardButton('🗑 حذف حساب ولي الأمر',callback_data='parent_delete',style='danger')])
     return InlineKeyboardMarkup(rows)
 
 
@@ -229,7 +232,7 @@ def guest_menu():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("🧪 تحضير اليوم",callback_data="today_prep"),InlineKeyboardButton("🎬 المحاضرات",callback_data="playlists")],
         [InlineKeyboardButton("📖 الملازم والملخصات",callback_data="study_resources"),InlineKeyboardButton("🗂 امتحانات سابقة",callback_data="past_exams")],
-        [InlineKeyboardButton("🎓 التسجيل في دورة الكيمياء",callback_data="guest_enroll")],
+        [InlineKeyboardButton("🎓 التسجيل في دورة اللغة العربية",callback_data="guest_enroll")],
     ])
 
 
@@ -238,10 +241,10 @@ def back_menu():
 
 
 async def is_group_member(bot, user_id):
-    if not CHEMISTRY_GROUP_ID:
+    if not ARABIC_GROUP_ID:
         return True
     try:
-        member = await bot.get_chat_member(CHEMISTRY_GROUP_ID, user_id)
+        member = await bot.get_chat_member(ARABIC_GROUP_ID, user_id)
         return member.status not in (ChatMemberStatus.LEFT, ChatMemberStatus.BANNED)
     except TelegramError:
         return False
@@ -259,7 +262,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if is_admin(user.id):
         context.user_data.pop("registration",None)
-        await update.effective_message.reply_text(bold("👑 مركز ادارة الكيمياء\n━━━━━━━━━━━━━━━━━━\nالنشر • الامتحانات • المتابعة\n\nاختر القسم المطلوب من اللوحة المنظمة ادناه"),parse_mode=ParseMode.HTML,reply_markup=main_menu(True))
+        await update.effective_message.reply_text(bold("👑 مركز ادارة اللغة العربية\n━━━━━━━━━━━━━━━━━━\nالنشر • الامتحانات • المتابعة\n\nاختر القسم المطلوب من اللوحة المنظمة ادناه"),parse_mode=ParseMode.HTML,reply_markup=main_menu(True))
         return ConversationHandler.END
     existing=await get_student(user.id)
     if existing and existing["approved"] and int(existing.get("onboarding_version") or 0)<19:
@@ -276,11 +279,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if pending_parent_students and not existing:
         context.user_data.pop("registration",None)
         names="، ".join(s["full_name"] for s in pending_parent_students)
-        await update.effective_message.reply_text(bold(f"⏳ طلب حساب ولي الأمر قيد المراجعة.\nالطالب: {names}\nستعمل الواجهة فور ضغط الإدارة زر «تفعيل الحساب»."),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🗑 حذف حسابي",callback_data="parent_delete",style="danger")]]))
+        await update.effective_message.reply_text(bold(f"⏳ طلب حساب ولي الأمر قيد المراجعة.\nالطالب: {names}\nستعمل الواجهة فور ضغط الإدارة زر «تفعيل الحساب»."),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🗑 حذف حساب ولي الأمر",callback_data="parent_delete",style="danger")]]))
         return ConversationHandler.END
     if not await is_group_member(context.bot,user.id):
         kb=InlineKeyboardMarkup([[InlineKeyboardButton("✅ نعم، أرغب بالتسجيل",callback_data="guest_enroll")],[InlineKeyboardButton("📚 لا، فتح المكتبة العامة",callback_data="guest_continue")]])
-        await update.effective_message.reply_text(bold("🧪 أهلاً بك في أكاديمية الكيمياء\n━━━━━━━━━━━━━━━━━━\nتعلّم • اختبر نفسك • تابع تقدمك\n━━━━━━━━━━━━━━━━━━\n\nهل ترغب بالانضمام إلى دورة الكيمياء المجانية؟"),parse_mode=ParseMode.HTML,reply_markup=kb)
+        await update.effective_message.reply_text(bold("🧪 أهلاً بك في أكاديمية اللغة العربية\n━━━━━━━━━━━━━━━━━━\nتعلّم • اختبر نفسك • تابع تقدمك\n━━━━━━━━━━━━━━━━━━\n\nهل ترغب بالانضمام إلى دورة اللغة العربية المجانية؟"),parse_mode=ParseMode.HTML,reply_markup=kb)
         return ConversationHandler.END
     if existing and existing["approved"]:
         context.user_data.pop("registration",None)
@@ -290,7 +293,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             kb=InlineKeyboardMarkup([[InlineKeyboardButton("📢 الاشتراك بقناة منصة المجتهد",url=REQUIRED_CHANNEL_URL)]])
             await update.effective_message.reply_text(bold("🔒 خدمات البوت مقفولة. يجب الاشتراك بقناة منصة المجتهد أولاً."),parse_mode=ParseMode.HTML,reply_markup=kb)
             return ConversationHandler.END
-        await update.effective_message.reply_text(bold(f"🧪 منصة المجتهد | الكيمياء\n━━━━━━━━━━━━━━━━━━\nاهلا {existing['full_name']} 👋\n\n🎯 ابدأ من جلسة اليوم حتى يعرض لك البوت اهم خطوة دراسية الآن"), parse_mode=ParseMode.HTML, reply_markup=main_menu())
+        await update.effective_message.reply_text(bold(f"⚡ بوت اللغة العربية | منصة المجتهد التعليمية\n━━━━━━━━━━━━━━━━━━\nأهلا {existing['full_name']} 👋\n\n🎯 ابدأ من مهامي اليومية حتى يعرض لك البوت أهم خطوة دراسية الآن"), parse_mode=ParseMode.HTML, reply_markup=main_menu())
         return ConversationHandler.END
     if existing and not existing["approved"]:
         if not existing.get("parent_chat_id"):
@@ -300,7 +303,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
     context.user_data["registration"] = {}
     context.user_data["registration_started_at"] = datetime.now(TIMEZONE)
-    await update.effective_message.reply_text(bold("🧪 أهلاً بك في بوت مادة الكيمياء\n\n✍️ أولاً: أرسل اسمك الرباعي:"), parse_mode=ParseMode.HTML)
+    await update.effective_message.reply_text(bold("🧪 أهلاً بك في بوت مادة اللغة العربية\n\n✍️ أولاً: أرسل اسمك الرباعي:"), parse_mode=ParseMode.HTML)
     return REG_NAME
 
 
@@ -326,10 +329,10 @@ async def reg_grade(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["registration"]["target_grade"]=value
     kb=InlineKeyboardMarkup([
         [InlineKeyboardButton("📢 الاشتراك بقناة منصة المجتهد",url=REQUIRED_CHANNEL_URL)],
-        [InlineKeyboardButton("👥 الانضمام إلى كروب الكيمياء",url=GROUP_INVITE_URL)],
+        [InlineKeyboardButton("👥 الانضمام إلى كروب اللغة العربية",url=GROUP_INVITE_URL)],
         [InlineKeyboardButton("✅ تحقق وأرسل طلب التفعيل",callback_data="verify_join")],
     ])
-    await update.effective_message.reply_text(bold("📌 رابعاً: اشترك بقناة منصة المجتهد وانضم إلى كروب الكيمياء، ثم اضغط زر التحقق."),parse_mode=ParseMode.HTML,reply_markup=kb); return REG_JOIN
+    await update.effective_message.reply_text(bold("📌 رابعاً: اشترك بقناة منصة المجتهد وانضم إلى كروب اللغة العربية، ثم اضغط زر التحقق."),parse_mode=ParseMode.HTML,reply_markup=kb); return REG_JOIN
 
 
 async def verify_join(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -337,13 +340,14 @@ async def verify_join(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await is_channel_member(context.bot,update.effective_user.id):
         await query.answer("يجب الاشتراك بقناة منصة المجتهد أولاً.",show_alert=True); return REG_JOIN
     if not await is_group_member(context.bot,update.effective_user.id):
-        await query.answer("لم يتم العثور عليك في كروب الكيمياء بعد.",show_alert=True); return REG_JOIN
+        await query.answer("لم يتم العثور عليك في كروب اللغة العربية بعد.",show_alert=True); return REG_JOIN
     reg=context.user_data.get("registration",{})
     student=await register_student(update.effective_user.id,update.effective_user.username,reg["full_name"],reg["school"],reg["target_grade"])
     context.user_data.pop("registration",None)
     if student.get('status')=='parent_account':
         await query.edit_message_text('حسابك مربوط كولي أمر. لا يمكن تسجيل الحساب نفسه كطالب؛ احذف حساب ولي الأمر أولاً من واجهته.')
         return ConversationHandler.END
+    await send_activation_request(context.bot,student)
     await query.edit_message_text(bold("✅ تم حفظ معلوماتك. بقي اختيار مسار الدراسة."),parse_mode=ParseMode.HTML,reply_markup=onboarding_track_keyboard())
     return ConversationHandler.END
 
@@ -358,15 +362,8 @@ async def send_activation_request(bot,student):
 
 
 def preparation_rows():
-    rows=[]; current=date(2026,8,25)
-    for prep_no,lectures in PREPARATIONS.items():
-        rows.append((prep_no,current,",".join(map(str,lectures)),3,prep_no))
-        current += timedelta(days={1:2,3:3,6:2}[current.weekday()])  # Tue→Thu, Thu→Sun, Sun→Tue
-    global_no=max(PREPARATIONS)
-    for chapter,chapter_prep_no,lectures in NEXT_PREPARATIONS:
-        rows.append((global_no+1,current,",".join(map(str,lectures)),chapter,chapter_prep_no)); global_no+=1
-        current += timedelta(days={1:2,3:3,6:2}[current.weekday()])
-    return rows
+    from data import initial_course_rows
+    return initial_course_rows()
 
 
 AR_DAYS={0:"الاثنين",1:"الثلاثاء",2:"الأربعاء",3:"الخميس",4:"الجمعة",5:"السبت",6:"الأحد"}
@@ -374,24 +371,25 @@ AR_DAYS={0:"الاثنين",1:"الثلاثاء",2:"الأربعاء",3:"الخ�
 
 def preparation_text(row):
     target=row["target_date"]; nums="  +  ".join(row["lectures"].split(","))
-    return bold(f"✦ تحاضير يوم {AR_DAYS[target.weekday()]} المصادف {target.day}/{target.month}/{target.year} ✦\n\n{DIV}\n\n🔹 الفصل {row.get('chapter',3)} | المحاضرة :  {nums}\n\n{DIV}")
+    return bold(f"✦ تحاضير يوم {AR_DAYS[target.weekday()]} المصادف {target.day}/{target.month}/{target.year} ✦\n\n{DIV}\n\n🔹 الباب {row.get('chapter',2)} | المحاضرة :  {nums}\n\n{DIV}")
 
 
 async def publish_preparations_job(context: ContextTypes.DEFAULT_TYPE):
     now=datetime.now(TIMEZONE)
     for row in await due_preparations(now):
-        if not CHEMISTRY_GROUP_ID: continue
+        if not ARABIC_GROUP_ID: continue
         try:
-            await context.bot.send_message(CHEMISTRY_GROUP_ID,preparation_text(row),parse_mode=ParseMode.HTML,message_thread_id=PREPARATION_TOPIC_ID or None)
+            await context.bot.send_message(ARABIC_GROUP_ID,preparation_text(row),parse_mode=ParseMode.HTML,message_thread_id=PREPARATION_TOPIC_ID or None)
             await mark_preparation_published(row["prep_no"])
             for student in await students_for_scope("course"):
+                if not await db.section_enabled(student['user_id'],'lectures'):continue
                 if await student_exam_lock(student["user_id"]):
                     continue
-                notice=bold(f"📚 نزل تحضير جديد لمسار الدورة\nالفصل {row['chapter']} | المحاضرات: {row['lectures']}\nافتح «تحاضير اليوم» داخل البوت.")
+                notice=bold(f"📚 نزل تحضير جديد لمسار الدورة\nالباب {row['chapter']} | المحاضرات: {row['lectures']}\nافتح «تحاضير اليوم» داخل البوت.")
                 try: await context.bot.send_message(student["user_id"],notice,parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📚 تحاضير اليوم",callback_data="today_prep")]]))
                 except TelegramError: pass
                 for parent in await student_parents(student["user_id"],True):
-                    try: await context.bot.send_message(parent["parent_chat_id"],bold(f"📚 نزل تحضير جديد للطالب {student['full_name']}\nالفصل {row['chapter']} | المحاضرات: {row['lectures']}"),parse_mode=ParseMode.HTML)
+                    try: await context.bot.send_message(parent["parent_chat_id"],bold(f"📚 نزل تحضير جديد للطالب {student['full_name']}\nالباب {row['chapter']} | المحاضرات: {row['lectures']}"),parse_mode=ParseMode.HTML)
                     except TelegramError: pass
         except TelegramError as exc: logger.exception("Preparation publish failed: %s",exc)
 
@@ -403,13 +401,13 @@ async def personal_preparations_job(context: ContextTypes.DEFAULT_TYPE):
         # A student with any unsubmitted exam must not receive/open the next preparation.
         if await student_exam_lock(row["user_id"]):
             continue
-        text=bold(f"📚 تحضيرك الشخصي الجديد\nالفصل {row['chapter']} | المحاضرات: {row['lectures']}\n📅 {row['target_date'].strftime('%d/%m/%Y')}\n\nافتح «تحاضير اليوم» داخل البوت.")
+        text=bold(f"📚 تحضيرك الشخصي الجديد\nالباب {row['chapter']} | المحاضرات: {row['lectures']}\n📅 {row['target_date'].strftime('%d/%m/%Y')}\n\nافتح «تحاضير اليوم» داخل البوت.")
         try:
             await context.bot.send_message(row["user_id"],text,parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📚 تحاضير اليوم",callback_data="today_prep")]]))
         except TelegramError as exc:
             logger.warning("Personal preparation notification failed for %s: %s",row["user_id"],exc); continue
         for parent in await student_parents(row["user_id"],True):
-            try: await context.bot.send_message(parent["parent_chat_id"],bold(f"📚 تحضير جديد للطالب {row['full_name']}\nالفصل {row['chapter']} | المحاضرات: {row['lectures']}\n📅 {row['target_date'].strftime('%d/%m/%Y')}"),parse_mode=ParseMode.HTML)
+            try: await context.bot.send_message(parent["parent_chat_id"],bold(f"📚 تحضير جديد للطالب {row['full_name']}\nالباب {row['chapter']} | المحاضرات: {row['lectures']}\n📅 {row['target_date'].strftime('%d/%m/%Y')}"),parse_mode=ParseMode.HTML)
             except TelegramError: pass
         await mark_personal_preparation_notified(row["id"],row["user_id"],row["chapter"])
 
@@ -432,7 +430,7 @@ async def show_today_preparation(query):
     text=preparation_text(row) if row else bold("📭 لا يوجد تحضير منشور حالياً.")
     kb=[]
     if row:
-        for lecture in map(int,row["lectures"].split(",")): kb.append([InlineKeyboardButton(f"▶️ الذهاب إلى المحاضرة {lecture}",callback_data=f"prepopen|{row.get('chapter',3)}|{lecture}")])
+        for lecture in map(int,row["lectures"].split(",")): kb.append([InlineKeyboardButton(f"▶️ الذهاب إلى المحاضرة {lecture}",callback_data=f"prepopen|{row.get('chapter',2)}|{lecture}")])
     kb.append([back_menu()]); await query.edit_message_text(text,parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup(kb))
 
 
@@ -459,17 +457,23 @@ async def capture_group_task(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if not msg or not (is_admin(actor_id) or anonymous_admin): return
     if msg.reply_to_message and await submission_by_review(chat_id,msg.reply_to_message.message_id): return
     thread=msg.message_thread_id or 0
-    if chat_id==CHEMISTRY_GROUP_ID and thread==HOMEWORK_TOPIC_ID: kind="homework"
-    elif chat_id==CHEMISTRY_GROUP_ID and thread==EXAM_TOPIC_ID: kind="exam"
+    if chat_id==ARABIC_GROUP_ID and thread==HOMEWORK_TOPIC_ID: kind="homework"
+    elif chat_id==ARABIC_GROUP_ID and thread==EXAM_TOPIC_ID: kind="exam"
     else: return
     payload_type,file_id,content=message_payload(msg)
     if msg.media_group_id and not content:
         await append_pending_media(msg.media_group_id,payload_type,file_id,msg.message_id); return
     first_line=(content.strip().splitlines() or ["الواجب الجديد" if kind=="homework" else "الامتحان الجديد"])[0]
-    title=re.sub(r"#موعد.*$","",first_line).strip() or ("واجب الكيمياء" if kind=="homework" else "امتحان الكيمياء")
+    title=re.sub(r"#موعد.*$","",first_line).strip() or ("واجب اللغة العربية" if kind=="homework" else "امتحان اللغة العربية")
     if kind=="exam" and ("#تراكمي" in (content or "") or "امتحان تراكمي" in title) and not title.startswith("[تراكمي]"):
         title="[تراكمي] "+title.replace("#تراكمي","").strip()
     pending=await create_pending_task(kind,title,msg.chat_id,thread,msg.message_id,payload_type,file_id,msg.media_group_id,content,actor_id)
+    if pending and kind=="homework":
+        def stamp():
+            with db.connect() as conn,conn.cursor() as cur:
+                cur.execute("UPDATE arabic_pending_tasks SET homework_published_at=%s WHERE id=%s;",(msg.date,pending["id"]))
+                conn.commit()
+        await db.run(stamp)
     noun="الواجب" if kind=="homework" else "الامتحان"
     kb=InlineKeyboardMarkup([[
         InlineKeyboardButton(f"✅ نعم، ربط {noun}",callback_data=f"bind|{pending['id']}"),
@@ -497,7 +501,7 @@ async def send_task_content(bot,chat_id,task):
 def scope_label(scope):
     if scope=="course": return "مسار الدورة"
     if scope=="all": return "جميع المسارات"
-    if scope and scope.startswith("chapter_"): return f"الفصل {scope.split('_')[1]}"
+    if scope and scope.startswith("chapter_"): return f"الباب {scope.split('_')[1]}"
     return "المسار الدراسي"
 
 
@@ -506,6 +510,8 @@ async def notify_task_assignment(bot,task):
     label=scope_label(task.get("target_scope"))
     deadline=task["deadline"].astimezone(TIMEZONE).strftime("%d/%m/%Y %H:%M")
     for student in await assigned_students(task["id"]):
+        from student_sections_schema import task_section
+        if not await db.section_enabled(student["user_id"],task_section(task)):continue
         lecture_line=f"\n🎬 المحاضرات الداخلة: {task.get('linked_lectures')}" if task.get('linked_lectures') else ""
         try: await bot.send_message(student["user_id"],bold(f"🔔 نزل {noun} جديد\n📌 {task['title'].replace('[تراكمي ','').replace('] ','')}\n📚 {label}{lecture_line}\n⏰ آخر موعد: {deadline}\n\nافتح قسم {('الواجبات' if task['kind']=='homework' else 'الامتحانات')} داخل البوت."),parse_mode=ParseMode.HTML)
         except TelegramError: pass
@@ -551,7 +557,7 @@ async def show_task(query,context,task_id):
     effective=None
     if not is_admin(query.from_user.id):
         effective=await effective_task_deadline(task_id,query.from_user.id)
-        late_exam = task["kind"]=="exam" and task.get("closed") and not effective.get("submitted")
+        late_exam = task["kind"]=="exam" and task.get("closed") and effective and not effective.get("submitted")
         if (not effective or not effective.get("assigned") or (datetime.now(TIMEZONE)>=effective["deadline"] and not late_exam)):
             await query.answer("⏰ انتهى وقت هذا الامتحان أو الواجب.",show_alert=True); return
     if task["kind"]=="exam" and task.get("exam_approval_required") and not is_admin(query.from_user.id):
@@ -586,7 +592,6 @@ async def notify_student_and_parent(bot,student,text):
 
 
 async def ensure_student_topic(bot,student,chat_id):
-    """Return a dedicated student thread, or raise. Never return None for General."""
     return await _submission_topic_router.ensure(bot,student,chat_id)
 
 
@@ -594,7 +599,7 @@ async def receive_submission(update: Update, context: ContextTypes.DEFAULT_TYPE)
     task_id=context.user_data.get("waiting_submission")
     if not task_id: return False
     student=await get_student(update.effective_user.id)
-    if not student or not student["approved"] or (not student.get("parent_chat_id") and not student.get("admin_manual_active")) or (not student.get("admin_manual_active") and not await is_channel_member(context.bot,update.effective_user.id)):
+    if not student or not student["approved"] or (not student.get("parent_chat_id") and not await db.ar6_listener(update.effective_user.id)) or not await is_channel_member(context.bot,update.effective_user.id):
         context.user_data.pop("waiting_submission",None); await update.effective_message.reply_text(bold("🔒 لا يمكنك التسليم: يجب تفعيل الحساب وربط ولي الأمر والاشتراك بالقناة."),parse_mode=ParseMode.HTML); return True
     task=await get_task(task_id)
     effective=await effective_task_deadline(task_id,update.effective_user.id) if task else None
@@ -609,7 +614,7 @@ async def receive_submission(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if not destination:
         await msg.reply_text(bold("⚠️ تعذر التسليم لأن وجهة تصحيح الحلول غير مضبوطة. تواصل مع الإدارة."),parse_mode=ParseMode.HTML); return True
     thread_id=await ensure_student_topic(context.bot,student,destination)
-    if thread_id is None and destination==CHEMISTRY_GROUP_ID:
+    if thread_id is None and destination==ARABIC_GROUP_ID:
         await msg.reply_text(bold("⚠️ تعذر إنشاء ملف خاص لتسليمك. لم يُسجل الحل، حاول لاحقاً أو تواصل مع الإدارة."),parse_mode=ParseMode.HTML); return True
     initial_caption=bold(f"📥 {task['title']}\n👤 الطالب: {update.effective_user.full_name}\n🆔 {update.effective_user.id}")
     try:
@@ -742,7 +747,7 @@ async def receive_admin_communication(update: Update,context: ContextTypes.DEFAU
     mode="student"
     if content.startswith("#ولي"): mode="parent"; content=content[4:].strip()
     elif content.startswith("#الكل"): mode="both"; content=content[5:].strip()
-    prefix="💬 رسالة من إدارة دورة الكيمياء"
+    prefix="💬 رسالة من إدارة دورة اللغة العربية"
     recipients=[]
     if mode in ("student","both"): recipients.append((student["user_id"],"student"))
     if mode in ("parent","both") and student.get("parent_chat_id"): recipients.append((student["parent_chat_id"],"parent"))
@@ -771,7 +776,7 @@ async def direct_message_command(update: Update,context: ContextTypes.DEFAULT_TY
         await update.effective_message.reply_text(bold("⚠️ ولي الأمر غير مربوط."),parse_mode=ParseMode.HTML); return
     text_value=" ".join(context.args[1:])
     try:
-        sent=await context.bot.send_message(chat_id,bold(f"💬 رسالة من إدارة دورة الكيمياء\n\n{text_value}"),parse_mode=ParseMode.HTML)
+        sent=await context.bot.send_message(chat_id,bold(f"💬 رسالة من إدارة دورة اللغة العربية\n\n{text_value}"),parse_mode=ParseMode.HTML)
         await save_communication_route(chat_id,sent.message_id,student_id,update.effective_chat.id,update.effective_message.message_thread_id or 0,role)
         await update.effective_message.reply_text(bold("✅ تم إرسال الرسالة، ويمكنه الرد عليها مباشرة."),parse_mode=ParseMode.HTML)
     except TelegramError:
@@ -789,7 +794,7 @@ async def announce_champions(context,task_id):
     names="\n".join(f"👤 {winner['full_name']} — {winner['grade']}/100" for winner in winners)
     text=f"🏆 بطل الامتحان\n\n📝 {winners[0]['title']}\n{names}\n\nمبارك هذا الإنجاز المتميز!"
     try:
-        await context.bot.send_message(CHEMISTRY_GROUP_ID,bold(text),parse_mode=ParseMode.HTML,message_thread_id=CHAMPIONS_TOPIC_ID or None)
+        await context.bot.send_message(ARABIC_GROUP_ID,bold(text),parse_mode=ParseMode.HTML,message_thread_id=CHAMPIONS_TOPIC_ID or None)
     except TelegramError as exc:
         logger.warning("Champion announcement failed for task %s and will retry: %s",task_id,exc)
         return
@@ -804,11 +809,18 @@ async def finalize_album_submission(context: ContextTypes.DEFAULT_TYPE):
     uid=context.job.data["user_id"]; user_data=context.application.user_data.get(uid,{})
     state=user_data.get("submission_album")
     if not state or state.get("id")!=context.job.data["media_group_id"] or state.get("token")!=context.job.data.get("token"): return
+    upload=user_data.get('submission_upload')
+    if upload and upload.get('group_id')==state.get('id'):
+        from submission_uploads import upload_keyboard, MAX_SUBMISSION_FILES
+        try:
+            await context.bot.send_message(uid,bold(f'📎 تم استلام الدفعة. يمكنك إرسال بقية الحل حتى {MAX_SUBMISSION_FILES} صورة أو ملف، ثم اضغط «إنهاء التسليم».'),parse_mode=ParseMode.HTML,reply_markup=upload_keyboard(globals(),state['task_id']))
+        except TelegramError: pass
+        return
     user_data.pop("submission_album",None); user_data.pop("waiting_submission",None)
     task_id=state["task_id"]
     confirm_kb=InlineKeyboardMarkup([[InlineKeyboardButton("✅ لا، إجاباتي صحيحة",callback_data=f"submissionok|{task_id}"),InlineKeyboardButton("🔄 نعم، أريد تغييرها",callback_data=f"retrysubmission|{task_id}")],
         [InlineKeyboardButton("🎬 فتح المحاضرات التالية",callback_data="today_prep")]])
-    try: await context.bot.send_message(uid,bold(f"✅ تم تسجيل وإرسال جميع صور الحل للأستاذ بنجاح.\n⭐ {'أضيفت نقاط المهمة إلى حسابك.' if state.get('added') else 'تم استبدال تسليمك السابق.'}\n\nهل تود تغيير الإجابات لوجود خطأ في إحدى الصور؟\nيمكنك تغييرها مرتين فقط لكل امتحان أو واجب."),parse_mode=ParseMode.HTML,reply_markup=confirm_kb)
+    try: await context.bot.send_message(uid,bold(f"✅ تم تسجيل وإرسال جميع صور الحل للأستاذ بنجاح.\n⭐ {'أضيفت نقاط المهمة إلى حسابك.' if state.get('added') else 'تم استبدال تسليمك السابق.'}\n\nهل تود تغيير الإجابات لوجود خطأ في إحدى الصور؟\nيمكنك تغييرها مرة واحدة فقط لكل امتحان أو واجب."),parse_mode=ParseMode.HTML,reply_markup=confirm_kb)
     except TelegramError: pass
 
 
@@ -904,13 +916,13 @@ async def publish_manual_now(bot,state,admin_id):
     try:
         for index,(payload_type,file_id) in enumerate(state["media"]):
             item_caption=caption if index==0 else None
-            if payload_type=="photo": sent=await bot.send_photo(CHEMISTRY_GROUP_ID,file_id,caption=item_caption,parse_mode=ParseMode.HTML if item_caption else None,message_thread_id=thread or None)
-            elif payload_type=="document": sent=await bot.send_document(CHEMISTRY_GROUP_ID,file_id,caption=item_caption,parse_mode=ParseMode.HTML if item_caption else None,message_thread_id=thread or None)
-            else: sent=await bot.send_video(CHEMISTRY_GROUP_ID,file_id,caption=item_caption,parse_mode=ParseMode.HTML if item_caption else None,message_thread_id=thread or None)
+            if payload_type=="photo": sent=await bot.send_photo(ARABIC_GROUP_ID,file_id,caption=item_caption,parse_mode=ParseMode.HTML if item_caption else None,message_thread_id=thread or None)
+            elif payload_type=="document": sent=await bot.send_document(ARABIC_GROUP_ID,file_id,caption=item_caption,parse_mode=ParseMode.HTML if item_caption else None,message_thread_id=thread or None)
+            else: sent=await bot.send_video(ARABIC_GROUP_ID,file_id,caption=item_caption,parse_mode=ParseMode.HTML if item_caption else None,message_thread_id=thread or None)
             sent_items.append((payload_type,file_id,sent.message_id))
     except TelegramError: return None
     first_type,first_file,first_message=sent_items[0]
-    pending=await create_pending_task(kind,title,CHEMISTRY_GROUP_ID,thread,first_message,first_type,first_file,None,state["title"],admin_id)
+    pending=await create_pending_task(kind,title,ARABIC_GROUP_ID,thread,first_message,first_type,first_file,None,state["title"],admin_id)
     await set_pending_task_scope(pending["id"],scope)
     for payload_type,file_id,message_id in sent_items[1:]: await add_pending_media_by_id(pending["id"],payload_type,file_id,message_id)
     return pending
@@ -972,13 +984,13 @@ async def release_exam_questions(context,task):
     media=await get_task_media(task["id"])
     if not media and task.get("file_id"): media=[{"payload_type":task["payload_type"],"file_id":task["file_id"]}]
     if not media and task.get("text_content"):
-        await context.bot.send_message(CHEMISTRY_GROUP_ID,bold(f"📝 أسئلة {task['title']} بعد انتهاء وقت الامتحان\n\n{task['text_content']}"),parse_mode=ParseMode.HTML,message_thread_id=EXAM_TOPIC_ID or None)
+        await context.bot.send_message(ARABIC_GROUP_ID,bold(f"📝 أسئلة {task['title']} بعد انتهاء وقت الامتحان\n\n{task['text_content']}"),parse_mode=ParseMode.HTML,message_thread_id=EXAM_TOPIC_ID or None)
     else:
         for index,item in enumerate(media):
             cap=bold(f"📝 أسئلة {task['title']} بعد انتهاء وقت الامتحان") if index==0 else None
-            if item["payload_type"]=="photo": await context.bot.send_photo(CHEMISTRY_GROUP_ID,item["file_id"],caption=cap,parse_mode=ParseMode.HTML if cap else None,message_thread_id=EXAM_TOPIC_ID or None)
-            elif item["payload_type"]=="document": await context.bot.send_document(CHEMISTRY_GROUP_ID,item["file_id"],caption=cap,parse_mode=ParseMode.HTML if cap else None,message_thread_id=EXAM_TOPIC_ID or None)
-            else: await context.bot.send_video(CHEMISTRY_GROUP_ID,item["file_id"],caption=cap,parse_mode=ParseMode.HTML if cap else None,message_thread_id=EXAM_TOPIC_ID or None)
+            if item["payload_type"]=="photo": await context.bot.send_photo(ARABIC_GROUP_ID,item["file_id"],caption=cap,parse_mode=ParseMode.HTML if cap else None,message_thread_id=EXAM_TOPIC_ID or None)
+            elif item["payload_type"]=="document": await context.bot.send_document(ARABIC_GROUP_ID,item["file_id"],caption=cap,parse_mode=ParseMode.HTML if cap else None,message_thread_id=EXAM_TOPIC_ID or None)
+            else: await context.bot.send_video(ARABIC_GROUP_ID,item["file_id"],caption=cap,parse_mode=ParseMode.HTML if cap else None,message_thread_id=EXAM_TOPIC_ID or None)
     await mark_questions_released(task["id"])
 
 
@@ -990,14 +1002,14 @@ async def issue_missing_task_warnings(context,task):
             continue
         count=result["count"]; warned+=1
         text=f"⚠️ إنذار تلقائي ({count}/{MAX_WARNINGS})\nالسبب: عدم إرسال {task['title']}"
-        if count==4: text+="\n🚨 هذا هو التحذير الأخير."
-        if count>=MAX_WARNINGS and CHEMISTRY_GROUP_ID:
+        if count==MAX_WARNINGS-1: text+="\n🚨 هذا هو التحذير الأخير."
+        if count>=MAX_WARNINGS and ARABIC_GROUP_ID:
             try:
-                await context.bot.ban_chat_member(CHEMISTRY_GROUP_ID,student["user_id"]); removed+=1; text+="\n🚫 تم حظرك من كروب الكيمياء."
+                await context.bot.ban_chat_member(ARABIC_GROUP_ID,student["user_id"]); removed+=1; text+="\n🚫 تم حظرك من كروب اللغة العربية."
             except TelegramError as exc:
                 logger.warning("Could not ban student %s after warnings: %s",student["user_id"],exc)
         await notify_student_and_parent(context.bot,student,text)
-        try: await context.bot.send_message(CHEMISTRY_GROUP_ID,bold(f"⚠️ {student['full_name']}\n{text}"),parse_mode=ParseMode.HTML,message_thread_id=WARNINGS_TOPIC_ID or None)
+        try: await context.bot.send_message(ARABIC_GROUP_ID,bold(f"⚠️ {student['full_name']}\n{text}"),parse_mode=ParseMode.HTML,message_thread_id=WARNINGS_TOPIC_ID or None)
         except TelegramError as exc: logger.warning("Could not publish warning for %s: %s",student["user_id"],exc)
     return warned,removed
 
@@ -1046,17 +1058,17 @@ async def scheduled_tasks_job(context: ContextTypes.DEFAULT_TYPE):
                 for item in media: sent_items.append((item["payload_type"],item["file_id"],synthetic_message))
                 task_chat=OWNER_CHAT_ID or row["created_by"]
             elif row["kind"]=="exam":
-                notice=await context.bot.send_message(CHEMISTRY_GROUP_ID,bold(f"📝 بدأ {visible_title}\nالأسئلة متاحة داخل البوت بعد تفعيل ولي الأمر.\n⏰ ينتهي: {deadline.astimezone(TIMEZONE).strftime('%d/%m/%Y %H:%M')}"),parse_mode=ParseMode.HTML,message_thread_id=thread or None)
+                notice=await context.bot.send_message(ARABIC_GROUP_ID,bold(f"📝 بدأ {visible_title}\nالأسئلة متاحة داخل البوت بعد تفعيل ولي الأمر.\n⏰ ينتهي: {deadline.astimezone(TIMEZONE).strftime('%d/%m/%Y %H:%M')}"),parse_mode=ParseMode.HTML,message_thread_id=thread or None)
                 for item in media: sent_items.append((item["payload_type"],item["file_id"],notice.message_id))
-                task_chat=CHEMISTRY_GROUP_ID
+                task_chat=ARABIC_GROUP_ID
             else:
                 for index,item in enumerate(media):
                     item_caption=caption if index==0 else None
-                    if item["payload_type"]=="photo": sent=await context.bot.send_photo(CHEMISTRY_GROUP_ID,item["file_id"],caption=item_caption,parse_mode=ParseMode.HTML if item_caption else None,message_thread_id=thread or None)
-                    elif item["payload_type"]=="document": sent=await context.bot.send_document(CHEMISTRY_GROUP_ID,item["file_id"],caption=item_caption,parse_mode=ParseMode.HTML if item_caption else None,message_thread_id=thread or None)
-                    else: sent=await context.bot.send_video(CHEMISTRY_GROUP_ID,item["file_id"],caption=item_caption,parse_mode=ParseMode.HTML if item_caption else None,message_thread_id=thread or None)
+                    if item["payload_type"]=="photo": sent=await context.bot.send_photo(ARABIC_GROUP_ID,item["file_id"],caption=item_caption,parse_mode=ParseMode.HTML if item_caption else None,message_thread_id=thread or None)
+                    elif item["payload_type"]=="document": sent=await context.bot.send_document(ARABIC_GROUP_ID,item["file_id"],caption=item_caption,parse_mode=ParseMode.HTML if item_caption else None,message_thread_id=thread or None)
+                    else: sent=await context.bot.send_video(ARABIC_GROUP_ID,item["file_id"],caption=item_caption,parse_mode=ParseMode.HTML if item_caption else None,message_thread_id=thread or None)
                     sent_items.append((item["payload_type"],item["file_id"],sent.message_id))
-                task_chat=CHEMISTRY_GROUP_ID
+                task_chat=ARABIC_GROUP_ID
             reward=30 if row["kind"]=="homework" else 20
             first_type,first_file,first_message=sent_items[0]
             linked_lectures=await linked_definition_lecture_text(row["linked_definition_id"]) if row.get("linked_definition_id") else ""
@@ -1124,39 +1136,39 @@ async def exam_parent_readiness_job(context: ContextTypes.DEFAULT_TYPE):
 
 async def track_chat_member(update: Update,context: ContextTypes.DEFAULT_TYPE):
     change=update.chat_member
-    if not change or change.chat.id!=CHEMISTRY_GROUP_ID: return
+    if not change or change.chat.id!=ARABIC_GROUP_ID: return
     user=change.new_chat_member.user
     if user.is_bot or is_admin(user.id): return
     status=change.new_chat_member.status
     if status in (ChatMemberStatus.MEMBER,ChatMemberStatus.RESTRICTED,ChatMemberStatus.ADMINISTRATOR,ChatMemberStatus.OWNER):
         student=await get_student(user.id)
-        if student and student["approved"] and student.get("parent_chat_id"): await mark_member_compliant(user.id)
+        if student and student["approved"] and (student.get("parent_chat_id") or student.get("admin_manual_active")): await mark_member_compliant(user.id)
         else:
             await observe_group_member(user.id,ACTIVATION_GRACE_HOURS)
-            try: await context.bot.send_message(user.id,bold(f"⏳ لديك {ACTIVATION_GRACE_HOURS} ساعة لتسجيل وتفعيل بوت الكيمياء وربط ولي الأمر، وإلا ستُزال من كروب الدورة."),parse_mode=ParseMode.HTML)
+            try: await context.bot.send_message(user.id,bold(f"⏳ لديك {ACTIVATION_GRACE_HOURS} ساعة لتسجيل وتفعيل بوت اللغة العربية وربط ولي الأمر، وإلا ستُزال من كروب الدورة."),parse_mode=ParseMode.HTML)
             except TelegramError: pass
 
 
 async def observe_group_activity(update: Update,context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_chat.id!=CHEMISTRY_GROUP_ID or not update.effective_user or update.effective_user.is_bot or is_admin(update.effective_user.id): return
+    if update.effective_chat.id!=ARABIC_GROUP_ID or not update.effective_user or update.effective_user.is_bot or is_admin(update.effective_user.id): return
     student=await get_student(update.effective_user.id)
-    if student and student["approved"] and student.get("parent_chat_id"): await mark_member_compliant(update.effective_user.id)
+    if student and student["approved"] and (student.get("parent_chat_id") or student.get("admin_manual_active")): await mark_member_compliant(update.effective_user.id)
     else: await observe_group_member(update.effective_user.id,ACTIVATION_GRACE_HOURS)
 
 
 async def activation_compliance_job(context: ContextTypes.DEFAULT_TYPE):
     for row in await due_unactivated_members():
         uid=row["user_id"]
-        if is_admin(uid): await mark_member_compliant(uid); continue
+        if is_admin(uid) or await db.ar6_listener(uid): await mark_member_compliant(uid); continue
         try:
-            member=await context.bot.get_chat_member(CHEMISTRY_GROUP_ID,uid)
+            member=await context.bot.get_chat_member(ARABIC_GROUP_ID,uid)
             if member.status in (ChatMemberStatus.LEFT,ChatMemberStatus.BANNED): await mark_member_removed(uid); continue
-            try: await context.bot.send_message(uid,bold("🚫 انتهت مهلة تفعيل بوت الكيمياء وربط ولي الأمر، لذلك تمت إزالتك من كروب الدورة. يمكنك التواصل مع الإدارة وإكمال التفعيل ثم العودة."),parse_mode=ParseMode.HTML)
-            except TelegramError: pass
             if not await db.v9_activation_still_due(uid):
-                continue  # Admin extended activation or activated student meanwhile.
-            await context.bot.ban_chat_member(CHEMISTRY_GROUP_ID,uid)
-            await context.bot.unban_chat_member(CHEMISTRY_GROUP_ID,uid,only_if_banned=True)
+                continue
+            try: await context.bot.send_message(uid,bold("🚫 انتهت مهلة تفعيل بوت اللغة العربية وربط ولي الأمر، لذلك تمت إزالتك من كروب الدورة. يمكنك التواصل مع الإدارة وإكمال التفعيل ثم العودة."),parse_mode=ParseMode.HTML)
+            except TelegramError: pass
+            await context.bot.ban_chat_member(ARABIC_GROUP_ID,uid)
+            await context.bot.unban_chat_member(ARABIC_GROUP_ID,uid,only_if_banned=True)
             await mark_member_removed(uid)
         except TelegramError as exc: logger.warning("Could not remove unactivated member %s: %s",uid,exc)
 
@@ -1188,6 +1200,7 @@ async def study_and_progress_job(context: ContextTypes.DEFAULT_TYPE):
         key=f"study_reminder_{now.date()}"
         if not await setting_value(key):
             for student in await approved_students():
+                if not await db.section_enabled(student['user_id'],'lectures'):continue
                 progress=await student_achievements(student["user_id"],now.replace(hour=0,minute=0,second=0,microsecond=0))
                 if progress["lectures"] or progress["homeworks"] or progress["exams"]:
                     message=f"أنت بدأت اليوم فعلاً: {progress['lectures']} محاضرة و{progress['homeworks']} واجب. لا تقطع السلسلة؛ أكمل خطوة واحدة إضافية الآن."
@@ -1200,25 +1213,35 @@ async def study_and_progress_job(context: ContextTypes.DEFAULT_TYPE):
             key=f"prep_{stage}_{row['prep_no']}_{row['user_id']}"
             if await setting_value(key): continue
             if stage=="reminder":
-                try: await context.bot.send_message(row["user_id"],bold(f"⏰ تذكير التحضير\nبقي نحو 6 ساعات على انتهاء مهلة مشاهدة محاضرات الفصل {row['chapter']} ({row['lectures']})."),parse_mode=ParseMode.HTML)
+                try: await context.bot.send_message(row["user_id"],bold(f"⏰ تذكير التحضير\nبقي نحو 6 ساعات على انتهاء مهلة مشاهدة محاضرات الباب {row['chapter']} ({row['lectures']})."),parse_mode=ParseMode.HTML)
                 except TelegramError: pass
             else:
                 student_row=await get_student(row["user_id"])
                 for p in await student_parents(row["user_id"],True):
-                    try: await context.bot.send_message(p["parent_chat_id"],bold(f"⚠️ انتهت مهلة التحضير\nلم يكمل الطالب {row['full_name']} محاضرات الفصل {row['chapter']} ({row['lectures']}) خلال 24 ساعة."),parse_mode=ParseMode.HTML)
+                    try: await context.bot.send_message(p["parent_chat_id"],bold(f"⚠️ انتهت مهلة التحضير\nلم يكمل الطالب {row['full_name']} محاضرات الباب {row['chapter']} ({row['lectures']}) خلال 24 ساعة."),parse_mode=ParseMode.HTML)
                     except TelegramError: pass
-                try: await context.bot.send_message(CHEMISTRY_GROUP_ID,bold(f"⚠️ تنبيه متابعة\nالطالب: {row['full_name']}\nلم يكمل المحاضرات خلال 24 ساعة: {row['lectures']}"),parse_mode=ParseMode.HTML,message_thread_id=WARNINGS_TOPIC_ID or None)
+                try: await context.bot.send_message(row["user_id"],bold(f"⚠️ انتهت مهلة المشاهدة\nلم تكمل المحاضرات: {row['lectures']}. افتح تحضيرك وأكمل المتبقي."),parse_mode=ParseMode.HTML)
                 except TelegramError: pass
+            if stage=="reminder":
+                for p in await student_parents(row["user_id"],True):
+                    try: await context.bot.send_message(p["parent_chat_id"],bold(f"⏰ تذكير مشاهدة للطالب {row['full_name']}\nبقي نحو 6 ساعات للمحاضرات: {row['lectures']}"),parse_mode=ParseMode.HTML)
+                    except TelegramError: pass
             await set_setting_value(key,"sent")
         for row in await incomplete_personal_preparation_students(stage):
             key=f"personal_prep_{stage}_{row['prep_id']}_{row['user_id']}"
             if await setting_value(key): continue
             if stage=="reminder":
-                try: await context.bot.send_message(row["user_id"],bold(f"⏰ تذكير التحضير الشخصي\nبقي نحو 6 ساعات على انتهاء مهلة محاضرات الفصل {row['chapter']} ({row['lectures']})."),parse_mode=ParseMode.HTML)
+                try: await context.bot.send_message(row["user_id"],bold(f"⏰ تذكير التحضير الشخصي\nبقي نحو 6 ساعات على انتهاء مهلة محاضرات الباب {row['chapter']} ({row['lectures']})."),parse_mode=ParseMode.HTML)
                 except TelegramError: pass
             else:
+                try: await context.bot.send_message(row["user_id"],bold(f"⚠️ انتهت مهلة المشاهدة\nلم تكمل المحاضرات: {row['lectures']}. افتح تحضيرك وأكمل المتبقي."),parse_mode=ParseMode.HTML)
+                except TelegramError: pass
                 for p in await student_parents(row["user_id"],True):
-                    try: await context.bot.send_message(p["parent_chat_id"],bold(f"⚠️ انتهت مهلة التحضير\nلم يكمل الطالب {row['full_name']} محاضرات الفصل {row['chapter']} ({row['lectures']}) خلال 24 ساعة."),parse_mode=ParseMode.HTML)
+                    try: await context.bot.send_message(p["parent_chat_id"],bold(f"⚠️ انتهت مهلة التحضير\nلم يكمل الطالب {row['full_name']} محاضرات الباب {row['chapter']} ({row['lectures']}) خلال 24 ساعة."),parse_mode=ParseMode.HTML)
+                    except TelegramError: pass
+            if stage=="reminder":
+                for p in await student_parents(row["user_id"],True):
+                    try: await context.bot.send_message(p["parent_chat_id"],bold(f"⏰ تذكير مشاهدة للطالب {row['full_name']}\nبقي نحو 6 ساعات للمحاضرات: {row['lectures']}"),parse_mode=ParseMode.HTML)
                     except TelegramError: pass
             await set_setting_value(key,"sent")
     if now.weekday()==4 and now.hour==20:
@@ -1226,7 +1249,7 @@ async def study_and_progress_job(context: ContextTypes.DEFAULT_TYPE):
         if not await setting_value(key):
             winner=await weekly_top_student(now-timedelta(days=7))
             if winner and winner["earned"]>0:
-                try: await context.bot.send_message(CHEMISTRY_GROUP_ID,bold(f"🏆 أفضل طالب هذا الأسبوع\n━━━━━━━━━━━━━━━━━━\n👤 {winner['full_name']}\n⭐ جمع {winner['earned']} XP خلال الأسبوع\n\nهذا التفوق نتيجة التزام يومي حقيقي. مبارك!"),parse_mode=ParseMode.HTML,message_thread_id=CHAMPIONS_TOPIC_ID or None)
+                try: await context.bot.send_message(ARABIC_GROUP_ID,bold(f"🏆 أفضل طالب هذا الأسبوع\n━━━━━━━━━━━━━━━━━━\n👤 {winner['full_name']}\n⭐ جمع {winner['earned']} XP خلال الأسبوع\n\nهذا التفوق نتيجة التزام يومي حقيقي. مبارك!"),parse_mode=ParseMode.HTML,message_thread_id=CHAMPIONS_TOPIC_ID or None)
                 except TelegramError: pass
             await set_setting_value(key,"sent")
 
@@ -1250,7 +1273,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             chapter=int(choice); plan=build_personal_plan(chapter,start_date)
             await set_student_onboarding(uid,"chapter",chapter,start_date,plan)
             weekly="5 أيام و6 محاضرات" if chapter==1 else "4 أيام و5 محاضرات" if chapter==2 else "3 أيام و3 محاضرات"
-            summary=f"📘 تم اختيار البدء من الفصل {chapter}.\n📅 الجدول الأول: {weekly} أسبوعياً، ثم ينتقل تلقائياً لنظام الفصل التالي."
+            summary=f"📘 تم اختيار البدء من الباب {chapter}.\n📅 الجدول الأول: {weekly} أسبوعياً، ثم ينتقل تلقائياً لنظام الباب التالي."
         await query.answer("تم حفظ المسار")
         student_row=await get_student(uid); command=f"/parent {student_row['parent_link_code']}"
         parent_note="" if student_row.get("parent_chat_id") else f"\n\n👨‍👩‍👦 يجب ربط ولي أمر حقيقي من حساب Telegram مختلف. انسخ الأمر التالي وأرسله لولي أمرك، ثم يرسله هو للبوت:\n<code>{escape(command)}</code>"
@@ -1354,7 +1377,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             kb=InlineKeyboardMarkup([[InlineKeyboardButton("اليوم",callback_data=f"parentleaveday|{student_id}|0"),InlineKeyboardButton("غداً",callback_data=f"parentleaveday|{student_id}|1")],[InlineKeyboardButton("◀️ واجهة ولي الأمر",callback_data="parent_menu")]])
             await query.answer(); await query.edit_message_text(bold(f"🏖 طلب إجازة لـ {student_row['full_name']}\nتعفيه من جميع مطلوبات يوم كامل، ويُخصم 400 XP من رصيده.\nالرصيد الحالي: {student_row['xp']} XP"),parse_mode=ParseMode.HTML,reply_markup=kb); return
         leave_date=now.date()+timedelta(days=int(parts[2])); student_row=await get_student(student_id)
-        if not student_row or not (student_row.get("study_track")=="chapter" or student_row.get("schedule_mode")=="custom"): await query.answer("نظام الإجازات متاح للطلاب على جدول شخصي أو مسار فصل مستقل.",show_alert=True); return
+        if not student_row or not (student_row.get("study_track")=="chapter" or student_row.get("schedule_mode")=="custom"): await query.answer("نظام الإجازات متاح للطلاب على جدول شخصي أو مسار وحدة مستقل.",show_alert=True); return
         if await leave_month_usage(student_id,leave_date)>=4: await query.answer("الطالب استنفد 4 إجازات لهذا الشهر.",show_alert=True); return
         result=await create_parent_leave(student_id,leave_date,uid)
         if result["status"]=="xp": await query.answer("رصيد الطالب أقل من 400 XP.",show_alert=True); return
@@ -1385,7 +1408,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 else: sent=await context.bot.send_video(chat_id,state["file_id"],caption=caption,parse_mode=ParseMode.HTML)
                 await save_communication_route(chat_id,sent.message_id,ref["user_id"],query.message.chat_id,state["thread_id"],role)
             await query.answer("أُرسل كرسالة عادية"); await query.edit_message_text(bold("✅ أُرسل الملف كرسالة عادية، ولم تُسجل درجة."),parse_mode=ParseMode.HTML)
-        except TelegramError: await query.answer("تعذر الإرسال.",show_alert=True)
+        except (TelegramError, TopicRoutingError): await query.answer("تعذر الإرسال.",show_alert=True)
         return
     if data.startswith("changegrade|"):
         if not is_admin(uid): await query.answer("هذا الزر للإدارة فقط.",show_alert=True); return
@@ -1417,19 +1440,19 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             kb=InlineKeyboardMarkup([[InlineKeyboardButton("✅ تفعيل الامتحان",callback_data=f"adminexamallow|{task_id}|{uid}")]])
             await context.bot.send_message(destination,bold(f"🔐 طلب تفعيل من الطالب\n👤 {student_row['full_name']}\n📝 {task['title']}"),parse_mode=ParseMode.HTML,message_thread_id=thread_id,reply_markup=kb)
             await query.answer("أُرسل الطلب للأدمن",show_alert=True)
-        except (TelegramError, TopicRoutingError): await query.answer("تعذر إرسال الطلب لتوبك الطالب حالياً.",show_alert=True)
+        except (TelegramError, TopicRoutingError): await query.answer("تعذر إرسال الطلب حالياً.",show_alert=True)
         return
     if data=="guest_continue":
-        await query.answer(); await query.edit_message_text(bold("📚 المكتبة العامة لبوت الكيمياء\nيمكنك تصفح المحتوى، أما خدمات الدورة فتحتاج إلى التسجيل."),parse_mode=ParseMode.HTML,reply_markup=guest_menu()); return
+        await query.answer(); await query.edit_message_text(bold("📚 المكتبة العامة لبوت اللغة العربية\nيمكنك تصفح المحتوى، أما خدمات الدورة فتحتاج إلى التسجيل."),parse_mode=ParseMode.HTML,reply_markup=guest_menu()); return
     if data=="guest_enroll":
-        kb=InlineKeyboardMarkup([[InlineKeyboardButton("👥 الانضمام إلى كروب الكيمياء",url=GROUP_INVITE_URL)],[InlineKeyboardButton("📩 التواصل مع الإدارة",url=f"https://t.me/{OWNER_USERNAME}")],[InlineKeyboardButton("📚 المكتبة العامة",callback_data="guest_continue")]])
-        await query.answer(); await query.edit_message_text(bold("🎓 التسجيل في الدورة المجانية\n\n1. انضم إلى كروب الكيمياء.\n2. تواصل مع الإدارة لتأكيد انضمامك.\n3. بعد إضافتك أرسل /start واملأ معلومات التسجيل."),parse_mode=ParseMode.HTML,reply_markup=kb); return
+        kb=InlineKeyboardMarkup([[InlineKeyboardButton("👥 الانضمام إلى كروب اللغة العربية",url=GROUP_INVITE_URL)],[InlineKeyboardButton("📩 التواصل مع الإدارة",url=f"https://t.me/{OWNER_USERNAME}")],[InlineKeyboardButton("📚 المكتبة العامة",callback_data="guest_continue")]])
+        await query.answer(); await query.edit_message_text(bold("🎓 التسجيل في الدورة المجانية\n\n1. انضم إلى كروب اللغة العربية.\n2. تواصل مع الإدارة لتأكيد انضمامك.\n3. بعد إضافتك أرسل /start واملأ معلومات التسجيل."),parse_mode=ParseMode.HTML,reply_markup=kb); return
     if data.startswith("deletetask|"):
         if not is_admin(uid): await query.answer("الحذف متاح للإدارة فقط.",show_alert=True); return
         task_id=int(data.split("|")[1]); task=await get_task(task_id)
         if not task: await query.answer("المنشور غير موجود.",show_alert=True); return
         kb=InlineKeyboardMarkup([[InlineKeyboardButton("✅ نعم، حذف نهائياً",callback_data=f"confirmdeletetask|{task_id}")],[InlineKeyboardButton("❌ تراجع",callback_data=f"task|{task_id}")]])
-        await query.answer(); await query.edit_message_text(bold(f"⚠️ تأكيد الحذف\nهل تريد حذف «{task['title'].replace('[تراكمي] ','')}»؟\nسيختفي من البوت ومن كروب الكيمياء، وتُحذف تسليماته ودرجاته المرتبطة."),parse_mode=ParseMode.HTML,reply_markup=kb); return
+        await query.answer(); await query.edit_message_text(bold(f"⚠️ تأكيد الحذف\nهل تريد حذف «{task['title'].replace('[تراكمي] ','')}»؟\nسيختفي من البوت ومن كروب اللغة العربية، وتُحذف تسليماته ودرجاته المرتبطة."),parse_mode=ParseMode.HTML,reply_markup=kb); return
     if data.startswith("confirmdeletetask|"):
         if not is_admin(uid): await query.answer("الحذف متاح للإدارة فقط.",show_alert=True); return
         task_id=int(data.split("|")[1]); task=await get_task(task_id)
@@ -1468,7 +1491,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data.startswith("addarchive|"):
         if not is_admin(uid): await query.answer("هذا الزر للأدمن فقط.",show_alert=True); return
         chapter=int(data.split("|")[1]); context.user_data["archive_awaiting"]={"chapter":chapter,"step":"lecture"}
-        await query.answer(); await query.edit_message_text(bold(f"🎬 أرسل رقم المحاضرة في الفصل {chapter} أولاً، وبعدها اسم الامتحان ثم الصور أو PDF."),parse_mode=ParseMode.HTML); return
+        await query.answer(); await query.edit_message_text(bold(f"🎬 أرسل رقم المحاضرة في الباب {chapter} أولاً، وبعدها اسم الامتحان ثم الصور أو PDF."),parse_mode=ParseMode.HTML); return
     if data.startswith("finishresource|"):
         if not is_admin(uid): await query.answer("هذا الزر للأدمن فقط.",show_alert=True); return
         resource_id=int(data.split("|")[1])
@@ -1499,10 +1522,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         kb=InlineKeyboardMarkup([
             [InlineKeyboardButton("📚 واجب",callback_data="manualkind|homework")],
             [InlineKeyboardButton("📝 امتحان الدورة الحالية",callback_data="courseexam_start")],
-            [InlineKeyboardButton("🔗 امتحان مرتبط بفصل",callback_data="linkedexam_start")],
+            [InlineKeyboardButton("🔗 امتحان مرتبط بوحدة",callback_data="linkedexam_start")],
             [InlineKeyboardButton("🏆 امتحان تراكمي للدورة",callback_data="courseexam_start|cumulative")],
             [InlineKeyboardButton("🗓 عرض المنشورات المجدولة",callback_data="scheduled_list")],[back_menu()]])
-        await query.answer(); await query.edit_message_text(bold("➕ اختر نوع المنشور الذي تريد نشره:\n\n📝 امتحان الدورة = للدورة الحالية فقط، ويرتبط بمجموعة محاضرات أو أكثر تلقائياً.\n🔗 امتحان الفصل = يرتبط بمحاضرة واحدة أو عدة محاضرات ويعمل لكل طالب حسب مساره."),parse_mode=ParseMode.HTML,reply_markup=kb); return
+        await query.answer(); await query.edit_message_text(bold("➕ اختر نوع المنشور الذي تريد نشره:\n\n📝 امتحان الدورة = للدورة الحالية فقط، ويرتبط بمجموعة محاضرات أو أكثر تلقائياً.\n🔗 امتحان الباب = يرتبط بمحاضرة واحدة أو عدة محاضرات ويعمل لكل طالب حسب مساره."),parse_mode=ParseMode.HTML,reply_markup=kb); return
     if data in {"linkedexam_start","courseexam_start","courseexam_start|cumulative"}:
         if not is_admin(uid): await query.answer("هذا القسم للإدارة فقط.",show_alert=True); return
         course=data.startswith("courseexam_start")
@@ -1518,11 +1541,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             buttons.append([back_menu()])
             text=("🏆 امتحان تراكمي للدورة الحالية" if cumulative else "📝 امتحان الدورة الحالية")+"\n\nاختر مجموعة محاضرات واحدة أو عدة مجموعات. يمكنك دمج أكثر من محاضرة في امتحان واحد. يصبح مستحقا فور إكمال الطالب جميع المحاضرات المطلوبة، ثم ينتظر موافقة ولي الأمر."
         else:
-            buttons=[[InlineKeyboardButton("📘 الفصل 1",callback_data="linkedexamchapter|1"),InlineKeyboardButton("📗 الفصل 2",callback_data="linkedexamchapter|2")],
-                     [InlineKeyboardButton("📙 الفصل 3",callback_data="linkedexamchapter|3"),InlineKeyboardButton("📕 الفصل 4",callback_data="linkedexamchapter|4")],
-                     [InlineKeyboardButton("📔 الفصل 5",callback_data="linkedexamchapter|5"),InlineKeyboardButton("📓 الفصل 6",callback_data="linkedexamchapter|6")],
-                     [InlineKeyboardButton("📒 الفصل 7",callback_data="linkedexamchapter|7")],[back_menu()]]
-            text="🔗 امتحان مرتبط بفصل\n\nاختر الفصل، ثم اختر المحاضرات التي تريد جمعها في الامتحان. يصبح الامتحان مستحقا فور إكمال جميع المحاضرات المطلوبة، ثم ينتظر موافقة ولي الأمر قبل الفتح."
+            buttons=[[InlineKeyboardButton(f"📘 الباب {chapter}",callback_data=f"linkedexamchapter|{chapter}")
+                      for chapter in range(start,min(start+2,6))] for start in range(1,6,2)]
+            buttons.append([back_menu()])
+            text="🔗 امتحان مرتبط بوحدة\n\nاختر الباب، ثم اختر المحاضرات التي تريد جمعها في الامتحان. يصبح الامتحان مستحقا فور إكمال جميع المحاضرات المطلوبة، ثم ينتظر موافقة ولي الأمر قبل الفتح."
         await query.answer(); await query.edit_message_text(bold(text),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup(buttons)); return
     if data.startswith("linkedexamchapter|"):
         if not is_admin(uid): await query.answer("هذا القسم للإدارة فقط.",show_alert=True); return
@@ -1533,8 +1555,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         rows=[]
         for i,nums in enumerate(groups,1): rows.append([InlineKeyboardButton(f"☐ المحاضرات {' + '.join(map(str,nums))}",callback_data=f"linkedexamprep|{chapter}|{i}")])
         rows.append([InlineKeyboardButton("✅ إنهاء اختيار المحاضرات",callback_data="linkedprep_done")])
-        rows.append([InlineKeyboardButton("◀️ اختيار الفصل",callback_data="linkedexam_start")])
-        await query.answer(); await query.edit_message_text(bold(f"📚 الفصل {chapter}\n\nاختر مجموعة محاضرات واحدة أو أكثر ثم اضغط إنهاء الاختيار."),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup(rows)); return
+        rows.append([InlineKeyboardButton("◀️ اختيار الباب",callback_data="linkedexam_start")])
+        await query.answer(); await query.edit_message_text(bold(f"📚 الباب {chapter}\n\nاختر مجموعة محاضرات واحدة أو أكثر ثم اضغط إنهاء الاختيار."),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup(rows)); return
     if data.startswith("coursepage|"):
         state=context.user_data.get("linked_exam")
         if not is_admin(uid) or not state or state.get("audience")!="course": await query.answer("ابدأ العملية من جديد.",show_alert=True); return
@@ -1588,16 +1610,18 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         state=context.user_data.get("linked_exam")
         if not is_admin(uid) or not state: await query.answer("ابدأ العملية من جديد.",show_alert=True); return
         state["selected_lectures"]=state.get("selected_lectures",[])
-        buttons=[[InlineKeyboardButton(f"📘 الفصل {i}",callback_data=f"linkedmanual_ch|{i}") for i in range(1,4)], [InlineKeyboardButton(f"📗 الفصل {i}",callback_data=f"linkedmanual_ch|{i}") for i in range(4,7)], [InlineKeyboardButton("📒 الفصل 7",callback_data="linkedmanual_ch|7"),InlineKeyboardButton("❌ إلغاء",callback_data="linkedexamcancel")]]
-        await query.answer(); await query.edit_message_text(bold("🎬 اختيار المحاضرات يدويًا\n\nاختر الفصل ثم حدد المحاضرات التي تريد إدخالها في الامتحان."),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup(buttons)); return
+        buttons=[[InlineKeyboardButton(f"📘 الباب {chapter}",callback_data=f"linkedmanual_ch|{chapter}")
+                  for chapter in range(start,min(start+3,6))] for start in range(1,6,3)]
+        buttons.append([InlineKeyboardButton("❌ إلغاء",callback_data="linkedexamcancel",style='danger')])
+        await query.answer(); await query.edit_message_text(bold("🎬 اختيار المحاضرات يدويًا\n\nاختر الباب ثم حدد المحاضرات التي تريد إدخالها في الامتحان."),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup(buttons)); return
     if data.startswith("linkedmanual_ch|"):
         state=context.user_data.get("linked_exam")
         if not is_admin(uid) or not state: await query.answer("ابدأ العملية من جديد.",show_alert=True); return
         ch=int(data.split("|")[1]); state["manual_chapter"]=ch; selected=set(tuple(x) for x in state.get("selected_lectures",[])); ids=[x[0] for x in PLAYLISTS.get(ch,[])]
         kb=[]
         for i in range(0,len(ids),3): kb.append([InlineKeyboardButton(("☑️ " if (ch,n) in selected else "☐ ")+f"م{n}",callback_data=f"linkedmanual_lect|{ch}|{n}") for n in ids[i:i+3]])
-        kb += [[InlineKeyboardButton("✅ إنهاء الاختيار",callback_data="linkedmanual_done")],[InlineKeyboardButton("◀️ الفصول",callback_data="linkedmanual_start")]]
-        await query.answer(); await query.edit_message_text(bold(f"📘 الفصل {ch}\n\nالمختار: {', '.join('م'+str(n) for c,n in sorted(selected) if c==ch) or 'لا يوجد'}"),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup(kb)); return
+        kb += [[InlineKeyboardButton("✅ إنهاء الاختيار",callback_data="linkedmanual_done")],[InlineKeyboardButton("◀️ الأبواب",callback_data="linkedmanual_start")]]
+        await query.answer(); await query.edit_message_text(bold(f"📘 الباب {ch}\n\nالمختار: {', '.join('م'+str(n) for c,n in sorted(selected) if c==ch) or 'لا يوجد'}"),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup(kb)); return
     if data.startswith("linkedmanual_lect|"):
         state=context.user_data.get("linked_exam")
         if not is_admin(uid) or not state: await query.answer("ابدأ العملية من جديد.",show_alert=True); return
@@ -1606,7 +1630,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else: selected.append(pair)
         state["selected_lectures"]=selected; ch=pair[0]; ids=[x[0] for x in PLAYLISTS.get(ch,[])]; sel=set(selected); kb=[]
         for i in range(0,len(ids),3): kb.append([InlineKeyboardButton(("☑️ " if (ch,n) in sel else "☐ ")+f"م{n}",callback_data=f"linkedmanual_lect|{ch}|{n}") for n in ids[i:i+3]])
-        kb += [[InlineKeyboardButton("✅ إنهاء الاختيار",callback_data="linkedmanual_done")],[InlineKeyboardButton("◀️ الفصول",callback_data="linkedmanual_start")]]
+        kb += [[InlineKeyboardButton("✅ إنهاء الاختيار",callback_data="linkedmanual_done")],[InlineKeyboardButton("◀️ الأبواب",callback_data="linkedmanual_start")]]
         await query.answer(); await query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(kb)); return
     if data=="linkedmanual_done":
         state=context.user_data.get("linked_exam")
@@ -1618,19 +1642,19 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not state or state.get("step")!="media" or not state.get("media") or (not state.get("selected_preps") and not state.get("selected_lectures")):
             await query.answer("أكمل اختيار مجموعات المحاضرات وأرسل ملفاً واحداً على الأقل.",show_alert=True); return
         if state.get("audience")=="chapter" and state.get("selected_preps") and len({c for c,p in state["selected_preps"]})!=1:
-            await query.answer("امتحان الفصل يجب أن تكون محاضراته من الفصل نفسه.",show_alert=True); return
+            await query.answer("امتحان الباب يجب أن تكون محاضراته من الباب نفسه.",show_alert=True); return
         try:
             definition=await create_linked_exam_definition(state.get("selected_preps",[]),state["title"],uid,state["media"],state.get("audience","chapter"),state.get("selected_lectures",[]),"cumulative" if state.get("cumulative") else "normal",DEFAULT_EXAM_HOURS)
         except Exception as exc:
             logger.exception("Could not create linked exam definition: %s",exc)
             await query.answer("تعذر حفظ الامتحان. حاول مرة أخرى.",show_alert=True); return
-        selected_text="، ".join(f"الفصل {c}/مجموعة {p}" for c,p in state.get("selected_preps",[])) or "اختيار يدوي"
+        selected_text="، ".join(f"الباب {c}/مجموعة {p}" for c,p in state.get("selected_preps",[])) or "اختيار يدوي"
         lecture_labels=[]
         for c,pno in state.get("selected_preps",[]):
             groups=CHAPTER_PREPARATION_DISTRIBUTION.get(c,[])
             if 1<=pno<=len(groups): lecture_labels.extend(f"ف{c}/م{number}" for number in groups[pno-1])
         lecture_labels.extend(f"ف{c}/م{l}" for c,l in state.get("selected_lectures",[]))
-        audience="الدورة الحالية فقط" if state.get("audience")=="course" else "الفصل المحدد"
+        audience="الدورة الحالية فقط" if state.get("audience")=="course" else "الباب المحدد"
         context.user_data.pop("linked_exam",None)
         await query.answer("تم حفظ الامتحان")
         await query.edit_message_text(bold(f"✅ تم حفظ الامتحان بنجاح\n\n🎯 النطاق: {audience}\n📚 المجموعات المختارة: {selected_text}\n🎬 المحاضرات الداخلة: {', '.join(sorted(set(lecture_labels)))}\n\n⏰ يصبح مستحقًا بعد إكمال جميع المحاضرات الداخلة.\n🔐 ثم يحتاج إلى موافقة ولي الأمر أو الإدارة قبل التفعيل.\n🔔 ويصله إشعار هو وولي الأمر."),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("➕ إضافة امتحان آخر",callback_data="courseexam_start" if state.get("audience")=="course" else "linkedexam_start")],[back_menu()]])); return
@@ -1666,7 +1690,12 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if state.get("kind") in {"exam","cumulative"}:
             await query.answer("الامتحانات تُضاف حصراً من نظام ربط الامتحان بالتحضير.",show_alert=True); return
         state["step"]="target_scope"
-        kb=InlineKeyboardMarkup([[InlineKeyboardButton("👥 مسار الدورة",callback_data="manualscope|course"),InlineKeyboardButton("📘 الفصل 1",callback_data="manualscope|chapter_1")],[InlineKeyboardButton("📗 الفصل 2",callback_data="manualscope|chapter_2"),InlineKeyboardButton("📙 الفصل 3",callback_data="manualscope|chapter_3")],[InlineKeyboardButton("الفصل 4",callback_data="manualscope|chapter_4"),InlineKeyboardButton("الفصل 5",callback_data="manualscope|chapter_5")],[InlineKeyboardButton("الفصل 6",callback_data="manualscope|chapter_6"),InlineKeyboardButton("الفصل 7",callback_data="manualscope|chapter_7")],[InlineKeyboardButton("📚 جميع المسارات",callback_data="manualscope|all")],[InlineKeyboardButton("❌ إلغاء العملية",callback_data="manualcancel")]])
+        scope_rows=[[InlineKeyboardButton("👥 مسار الدورة",callback_data="manualscope|course",style='success')]]
+        scope_rows += [[InlineKeyboardButton(f"📘 الباب {chapter}",callback_data=f"manualscope|chapter_{chapter}",style='primary')
+                        for chapter in range(start,min(start+2,6))] for start in range(1,6,2)]
+        scope_rows += [[InlineKeyboardButton("📚 جميع المسارات",callback_data="manualscope|all",style='primary')],
+                       [InlineKeyboardButton("❌ إلغاء العملية",callback_data="manualcancel",style='danger')]]
+        kb=InlineKeyboardMarkup(scope_rows)
         await query.answer(); await query.edit_message_text(bold(f"✅ اكتملت إضافة {len(state['media'])} ملفات.\nحدد الطلاب المستهدفين بهذا الواجب:"),parse_mode=ParseMode.HTML,reply_markup=kb); return
     if data.startswith("manualscope|"):
         if not is_admin(uid): await query.answer("هذا القسم للإدارة فقط.",show_alert=True); return
@@ -1674,7 +1703,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not state or state.get("step")!="target_scope": await query.answer("ابدأ إضافة المنشور من جديد.",show_alert=True); return
         state["target_scope"]=data.split("|",1)[1]; state["step"]="publish_time"
         kb=InlineKeyboardMarkup([[InlineKeyboardButton("🚀 النشر الآن",callback_data="manualpublishnow")],[InlineKeyboardButton("🗓 جدولة النشر",callback_data="manualschedule")],[InlineKeyboardButton("❌ إلغاء العملية",callback_data="manualcancel")]])
-        place="كروب الكيمياء والبوت" if state["target_scope"]=="course" else "البوت فقط بدون النشر في المجموعة"
+        place="كروب اللغة العربية والبوت" if state["target_scope"]=="course" else "البوت فقط بدون النشر في المجموعة"
         await query.answer(); await query.edit_message_text(bold(f"✅ تم تحديد المسار.\nطريقة الإرسال: {place}\nمتى تريد نشره؟"),parse_mode=ParseMode.HTML,reply_markup=kb); return
     if data=="manualcancel":
         if not is_admin(uid): await query.answer("هذا القسم للإدارة فقط.",show_alert=True); return
@@ -1693,12 +1722,12 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not pending: await query.answer("تعذر النشر. تحقق من صلاحيات البوت وأرقام Topics.",show_alert=True); return
         context.user_data.pop("manual_task",None)
         kb=InlineKeyboardMarkup([[InlineKeyboardButton("ساعتان",callback_data=f"deadline|{pending['id']}|2"),InlineKeyboardButton("6 ساعات",callback_data=f"deadline|{pending['id']}|6")],[InlineKeyboardButton("12 ساعة",callback_data=f"deadline|{pending['id']}|12"),InlineKeyboardButton("24 ساعة",callback_data=f"deadline|{pending['id']}|24")],[InlineKeyboardButton("48 ساعة",callback_data=f"deadline|{pending['id']}|48"),InlineKeyboardButton("72 ساعة",callback_data=f"deadline|{pending['id']}|72")],[InlineKeyboardButton("🗓 موعد انتهاء مخصص",callback_data=f"customdeadline|{pending['id']}")]])
-        place="كروب الكيمياء والبوت" if state.get("target_scope")=="course" else "البوت فقط للمسار المحدد"
+        place="كروب اللغة العربية والبوت" if state.get("target_scope")=="course" else "البوت فقط للمسار المحدد"
         await query.answer("تم النشر"); await query.edit_message_text(bold(f"✅ تم تجهيز المطلوب عبر {place}.\n⏰ اختر مدة انتهاء التسليم:"),parse_mode=ParseMode.HTML,reply_markup=kb); return
     if data=="prep_schedule":
         if not is_admin(uid): await query.answer("هذا القسم للإدارة فقط.",show_alert=True); return
         row=await next_unpublished_preparation()
-        info="لا توجد تحاضير قادمة." if not row else f"التحضير القادم: الفصل {row['chapter']} – التحضير {row['chapter_prep_no']}\nالمحاضرات: {row['lectures']}\nالتاريخ: {row['target_date'].strftime('%d/%m/%Y')}"
+        info="لا توجد تحاضير قادمة." if not row else f"التحضير القادم: الباب {row['chapter']} – التحضير {row['chapter_prep_no']}\nالمحاضرات: {row['lectures']}\nالتاريخ: {row['target_date'].strftime('%d/%m/%Y')}"
         kb=InlineKeyboardMarkup([[InlineKeyboardButton("⏩ تقديم موعد",callback_data="prep_shift|advance"),InlineKeyboardButton("⏪ تأخير موعد",callback_data="prep_shift|delay")],[InlineKeyboardButton("🏖 إعلان عطلة وتأجيل الجدول",callback_data="prep_holiday")],[InlineKeyboardButton("📅 تاريخ مخصص",callback_data="prep_custom")],[back_menu()]])
         await query.answer(); await query.edit_message_text(bold(f"🗓 إدارة جدول التحاضير\n\n{info}\n\nإذا لم تغيّر شيئاً يبقى الجدول التلقائي كما هو."),parse_mode=ParseMode.HTML,reply_markup=kb); return
     if data.startswith("prep_shift|") or data=="prep_holiday":
@@ -1708,7 +1737,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if row=="too_early": await query.answer("لا يمكن تقديم التحضير إلى اليوم أو إلى تاريخ مضى.",show_alert=True); return
         if not row: await query.answer("لا توجد تحاضير قادمة.",show_alert=True); return
         if data=="prep_holiday" and old:
-            try: await context.bot.send_message(CHEMISTRY_GROUP_ID,bold(f"🏖 إعلان عطلة\nلا يوجد تحضير يوم {old['target_date'].strftime('%d/%m/%Y')}.\nتم تأجيل الجدول تلقائياً، والتحضير القادم بتاريخ {row['target_date'].strftime('%d/%m/%Y')}."),parse_mode=ParseMode.HTML,message_thread_id=PREPARATION_TOPIC_ID or None)
+            try: await context.bot.send_message(ARABIC_GROUP_ID,bold(f"🏖 إعلان عطلة\nلا يوجد تحضير يوم {old['target_date'].strftime('%d/%m/%Y')}.\nتم تأجيل الجدول تلقائياً، والتحضير القادم بتاريخ {row['target_date'].strftime('%d/%m/%Y')}."),parse_mode=ParseMode.HTML,message_thread_id=PREPARATION_TOPIC_ID or None)
             except TelegramError: pass
         await query.answer("تم تحديث الجدول"); await query.edit_message_text(bold(f"✅ تم تحديث جميع التحاضير القادمة.\nالموعد الجديد للتحضير القادم: {row['target_date'].strftime('%d/%m/%Y')}"),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("◀️ إدارة الجدول",callback_data="prep_schedule"),back_menu()]])); return
     if data=="prep_custom":
@@ -1763,9 +1792,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if not await is_channel_member(context.bot,student_id):
                 await query.answer("لا يمكن التفعيل: الطالب غير مشترك بالقناة.",show_alert=True); return
             if not await is_group_member(context.bot,student_id):
-                await query.answer("لا يمكن التفعيل: الطالب غير موجود بكروب الكيمياء.",show_alert=True); return
+                await query.answer("لا يمكن التفعيل: الطالب غير موجود بكروب اللغة العربية.",show_alert=True); return
             await set_student_approval(student_id,True); await mark_member_compliant(student_id)
-            try: await context.bot.send_message(student_id,bold("🎉 وافقت الإدارة على طلبك وتم تفعيل حسابك.\nيمكنك الآن استخدام بوت الكيمياء."),parse_mode=ParseMode.HTML,reply_markup=main_menu())
+            try: await context.bot.send_message(student_id,bold("🎉 وافقت الإدارة على طلبك وتم تفعيل حسابك.\nيمكنك الآن استخدام بوت اللغة العربية."),parse_mode=ParseMode.HTML,reply_markup=main_menu())
             except TelegramError: pass
             await query.answer("تم تفعيل الطالب"); await query.edit_message_text((query.message.text_html or bold("طلب التفعيل"))+bold("\n\n✅ تم قبول الطالب وتفعيل حسابه."),parse_mode=ParseMode.HTML); return
         await delete_student(student_id)
@@ -1774,24 +1803,24 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer("تم رفض الطلب"); await query.edit_message_text((query.message.text_html or bold("طلب التفعيل"))+bold("\n\n❌ تم رفض الطلب."),parse_mode=ParseMode.HTML); return
     admin=is_admin(uid); student=None if admin else await get_student(uid)
     public=(data in {"menu","today_prep","playlists","study_resources","past_exams"} or data.startswith(("prepopen|","chapter|","lecture|","archivechapter|","archivelecture|","archiveexam|","resourcecategory|booklet","resourcecategory|summary","resourcecategory|ministerial","resourcechapter|booklet","resourcechapter|summary","resourcechapter|ministerial","resourceitem|")))
-    if not admin and student and student["approved"] and not student.get("parent_chat_id") and not student.get("admin_manual_active") and not public:
+    if not admin and student and student["approved"] and not student.get("parent_chat_id") and not public:
         await query.answer("يجب ربط ولي الأمر أولاً لفتح خدمات الدورة.",show_alert=True); return
     if not admin and (not student or not student["approved"]) and not public:
         await query.answer("هذه الخدمة مخصصة لطلاب الدورة المفعّلين.",show_alert=True); return
-    if not admin and student and student["approved"] and not student.get("admin_manual_active") and not await is_channel_member(context.bot,uid):
+    if not admin and student and student["approved"] and not await is_channel_member(context.bot,uid):
         kb=InlineKeyboardMarkup([[InlineKeyboardButton("📢 الاشتراك بالقناة",url=REQUIRED_CHANNEL_URL)]])
         await query.answer(); await query.edit_message_text(bold("🔒 تم قفل خدمات البوت لأنك غير مشترك بقناة منصة المجتهد."),parse_mode=ParseMode.HTML,reply_markup=kb); return
     await query.answer()
-    if data=="menu": await query.edit_message_text(bold("🧪 أكاديمية الكيمياء\n━━━━━━━━━━━━━━━━━━\nاختر القسم المطلوب ✨"),parse_mode=ParseMode.HTML,reply_markup=main_menu(admin) if (admin or (student and student["approved"])) else guest_menu()); return
+    if data=="menu": await query.edit_message_text(bold("🧪 أكاديمية اللغة العربية\n━━━━━━━━━━━━━━━━━━\nاختر القسم المطلوب ✨"),parse_mode=ParseMode.HTML,reply_markup=main_menu(admin) if (admin or (student and student["approved"])) else guest_menu()); return
     if data=="account_settings":
         kb=InlineKeyboardMarkup([
             [InlineKeyboardButton("👤 حسابي",callback_data="profile"),InlineKeyboardButton("👨‍👩‍👦 ولي الأمر",callback_data="parent_link")],
             [InlineKeyboardButton("✏️ تعديل معلوماتي",callback_data="edit_profile")],
-            [InlineKeyboardButton("🔄 تغيير فصل البداية / مسار الدراسة",callback_data="change_study_track")],
+            [InlineKeyboardButton("🔄 تغيير وحدة البداية / مسار الدراسة",callback_data="change_study_track")],
             [InlineKeyboardButton("🗓️ جدولي الدراسي",callback_data="personal_schedule")],
             [back_menu()]
         ])
-        await query.edit_message_text(bold("⚙️ إعدادات الحساب\n\nمن هنا يمكنك تغيير فصل البداية، أو اختيار «أكمل مع الدورة الحالية» للعودة إلى مسار الدورة كما كان قبل التحديث."),parse_mode=ParseMode.HTML,reply_markup=kb); return
+        await query.edit_message_text(bold("⚙️ إعدادات الحساب\n\nمن هنا يمكنك تغيير وحدة البداية، أو اختيار «أكمل مع الدورة الحالية» للعودة إلى مسار الدورة كما كان قبل التحديث."),parse_mode=ParseMode.HTML,reply_markup=kb); return
     if data=="change_study_track":
         await show_onboarding_track(query,True); return
     if data=="personal_schedule":
@@ -1839,14 +1868,14 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer("تمت العودة للجدول المنتظم",show_alert=True)
         await query.edit_message_text(bold("✅ تمت العودة إلى الجدول المنتظم."),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup([[back_menu()]])); return
     if data=="schedules_menu":
-        kb=InlineKeyboardMarkup([[InlineKeyboardButton("📚 جدول إكمال الفصول",callback_data="chapter_completion_schedule")],[InlineKeyboardButton("🗓 جدول هذا الأسبوع",callback_data="weekly_schedule")],[back_menu()]])
+        kb=InlineKeyboardMarkup([[InlineKeyboardButton("📚 جدول إكمال الأبواب",callback_data="chapter_completion_schedule")],[InlineKeyboardButton("🗓 جدول هذا الأسبوع",callback_data="weekly_schedule")],[back_menu()]])
         await query.edit_message_text(bold("🗓 الجداول الدراسية\nاختر الجدول المطلوب:"),parse_mode=ParseMode.HTML,reply_markup=kb); return
     if data=="chapter_completion_schedule":
         finish=await student_finish_date(uid)
         student=await get_student(uid)
-        track="الدورة الحالية" if student and student.get("study_track")=="course" else f"الفصل {student.get('current_chapter')}" if student else "-"
+        track="الدورة الحالية" if student and student.get("study_track")=="course" else f"الباب {student.get('current_chapter')}" if student else "-"
         value=finish.strftime("%d/%m/%Y") if finish else "لا يوجد موعد فعلي حالياً"
-        await query.edit_message_text(bold(f"📅 متى سوف ننهي المنهج؟\n{DIV}\n📚 مسارك: {track}\n🏁 موعد إكمال المنهج حسب جدول البوت الفعلي: {value}\n\nℹ️ هذا التاريخ يُحسب من مواعيد التحاضير الفعلية داخل البوت، ويتحرك تلقائياً عند تغيير الجدول أو إجازات الطالب."),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔄 تحديث الموعد",callback_data="chapter_completion_schedule")],[InlineKeyboardButton("◀️ الجداول",callback_data="schedules_menu"),back_menu()]])); return
+        await query.edit_message_text(bold(f"📅 متى سوف ننهي المنهج؟\n{DIV}\n📚 مسارك: {track}\n🏁 موعد إكمال الخطة الحالية حسب جدول البوت الفعلي: {value}\n\nℹ️ هذا التاريخ يُحسب من مواعيد التحاضير الفعلية داخل البوت، ويتحرك تلقائياً عند تغيير الجدول أو إجازات الطالب."),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔄 تحديث الموعد",callback_data="chapter_completion_schedule")],[InlineKeyboardButton("◀️ الجداول",callback_data="schedules_menu"),back_menu()]])); return
     if data=="achievement_menu":
         kb=InlineKeyboardMarkup([[InlineKeyboardButton("☀️ اليوم",callback_data="achievement|day"),InlineKeyboardButton("📅 الأسبوع",callback_data="achievement|week"),InlineKeyboardButton("🗓 الشهر",callback_data="achievement|month")],[back_menu()]])
         await query.edit_message_text(bold("🏅 إنجازي\nاختر الفترة التي تريد عرضها:"),parse_mode=ParseMode.HTML,reply_markup=kb); return
@@ -1866,7 +1895,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data=="weekly_schedule":
         today=datetime.now(TIMEZONE).date(); start=today-timedelta(days=today.weekday()); end=start+timedelta(days=6); preps,tasks=await weekly_schedule(start,end)
         lines=[f"🗓 جدول هذا الأسبوع\n{start.strftime('%d/%m')} — {end.strftime('%d/%m')}",DIV]
-        for p in preps: lines.append(f"🎬 {p['target_date'].strftime('%d/%m')} | الفصل {p['chapter']} | المحاضرات {p['lectures']}")
+        for p in preps: lines.append(f"🎬 {p['target_date'].strftime('%d/%m')} | الباب {p['chapter']} | المحاضرات {p['lectures']}")
         for t in tasks: lines.append(f"{'📚' if t['kind']=='homework' else '📝'} {t['publish_at'].astimezone(TIMEZONE).strftime('%d/%m %H:%M')} | {t['title']}")
         if len(lines)==2: lines.append("لا توجد عناصر مجدولة حالياً.")
         await query.edit_message_text(bold("\n".join(lines)),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup([[back_menu()]])); return
@@ -1888,11 +1917,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if admin:
             await query.answer("هذا الخيار للطلاب فقط.",show_alert=True); return
         await query.answer()
-        await query.edit_message_text(bold("📚 تغيير فصل البداية\n\nاختر الفصل الذي تريد أن يبدأ منه جدولك الجديد.\nسيُعاد بناء التحضير من تاريخ اليوم، وتبقى بقية ميزات حسابك كما هي."),parse_mode=ParseMode.HTML,
+        await query.edit_message_text(bold("📚 تغيير وحدة البداية\n\nاختر الباب الذي تريد أن يبدأ منه جدولك الجديد.\nسيُعاد بناء التحضير من تاريخ اليوم، وتبقى بقية ميزات حسابك كما هي."),parse_mode=ParseMode.HTML,
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("📘 1",callback_data="profilechapter|1"),InlineKeyboardButton("📗 2",callback_data="profilechapter|2"),InlineKeyboardButton("📙 3",callback_data="profilechapter|3")],
-                [InlineKeyboardButton("📕 4",callback_data="profilechapter|4"),InlineKeyboardButton("📒 5",callback_data="profilechapter|5"),InlineKeyboardButton("📓 6",callback_data="profilechapter|6")],
-                [InlineKeyboardButton("📔 7",callback_data="profilechapter|7")],
+                [InlineKeyboardButton("📕 4",callback_data="profilechapter|4"),InlineKeyboardButton("📒 5",callback_data="profilechapter|5")],
                 [InlineKeyboardButton("◀️ الملف الشخصي",callback_data="profile"),back_menu()]
             ]))
         return
@@ -1900,12 +1928,12 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if admin:
             await query.answer("هذا الخيار للطلاب فقط.",show_alert=True); return
         chapter=int(data.split("|",1)[1])
-        if chapter not in range(1,8):
-            await query.answer("الفصل غير متاح.",show_alert=True); return
+        if chapter not in range(1,6):
+            await query.answer("الباب غير متاح.",show_alert=True); return
         plan=build_personal_plan(chapter,datetime.now(TIMEZONE).date())
         await set_student_onboarding(uid,"chapter",chapter,datetime.now(TIMEZONE).date(),plan)
-        await query.answer("تم تغيير فصل البداية")
-        await query.edit_message_text(bold(f"✅ تم تغيير فصل البداية إلى الفصل {chapter}.\n\nتم إعادة بناء جدول التحضير من اليوم وفق التوزيع المعتمد، ولن تتأثر درجاتك أو إنذاراتك أو نقاطك أو باقي ميزات الحساب."),parse_mode=ParseMode.HTML,
+        await query.answer("تم تغيير وحدة البداية")
+        await query.edit_message_text(bold(f"✅ تم تغيير وحدة البداية إلى الباب {chapter}.\n\nتم إعادة بناء جدول التحضير من اليوم وفق التوزيع المعتمد، ولن تتأثر درجاتك أو إنذاراتك أو نقاطك أو باقي ميزات الحساب."),parse_mode=ParseMode.HTML,
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("👤 الملف الشخصي",callback_data="profile")],[back_menu()]]))
         return
     if data=="edit_profile":
@@ -1919,13 +1947,13 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         progress=await lecture_progress(uid,chapter,lecture)
         if progress and progress.get("completed_at"):
             await query.answer("تم تسجيل دراستك لهذه المحاضرة مسبقاً.",show_alert=True); return
-        kb=InlineKeyboardMarkup([[InlineKeyboardButton("▶️ مشاهدة محاضرة البوت",callback_data=f"prepwatch|{chapter}|{lecture}")],[InlineKeyboardButton("📚 لقد درست هذه المحاضرة",callback_data=f"prepprivate|{chapter}|{lecture}")],[back_menu()]])
-        await query.edit_message_text(bold(f"🎬 الفصل {chapter} | المحاضرة {lecture}\n{item[1]}\n\nاختر طريقة دراستك للمحاضرة:"),parse_mode=ParseMode.HTML,reply_markup=kb); return
+        kb=InlineKeyboardMarkup([[InlineKeyboardButton("▶️ دراسة صفحات الملزمة",callback_data=f"prepwatch|{chapter}|{lecture}")],[InlineKeyboardButton("📚 لقد درست هذه المحاضرة",callback_data=f"prepprivate|{chapter}|{lecture}")],[back_menu()]])
+        await query.edit_message_text(bold(f"🎬 الباب {chapter} | المحاضرة {lecture}\n{item[1]}\n\nاختر طريقة دراستك للمحاضرة:"),parse_mode=ParseMode.HTML,reply_markup=kb); return
     if data.startswith("prepwatch|"):
         _,chapter_s,lecture_s=data.split("|"); chapter,lecture=int(chapter_s),int(lecture_s); item=PLAYLISTS[chapter][lecture-1]
         if student and student["approved"]: await mark_lecture_progress(uid,chapter,lecture,False)
-        kb=InlineKeyboardMarkup([[InlineKeyboardButton("▶️ فتح المحاضرة على YouTube",url=item[2])],[InlineKeyboardButton("✅ أنهيت المحاضرة",callback_data=f"prepcomplete|{chapter}|{lecture}")],[back_menu()]])
-        await query.edit_message_text(bold(f"🎬 الفصل {chapter} | المحاضرة {lecture}\n{item[1]}\n\nبعد المشاهدة ارجع واضغط «أنهيت المحاضرة»."),parse_mode=ParseMode.HTML,reply_markup=kb); return
+        kb=InlineKeyboardMarkup([[InlineKeyboardButton("▶️ عرض صفحات الملزمة",**page_button_target(item))],[InlineKeyboardButton("✅ أنهيت المحاضرة",callback_data=f"prepcomplete|{chapter}|{lecture}")],[back_menu()]])
+        await query.edit_message_text(bold(f"🎬 الباب {chapter} | المحاضرة {lecture}\n{item[1]}\n\nبعد الدراسة ارجع واضغط «أنهيت المحاضرة»."),parse_mode=ParseMode.HTML,reply_markup=kb); return
     if data.startswith("prepprivate|"):
         if admin: return
         _,chapter_s,lecture_s=data.split("|"); chapter,lecture=int(chapter_s),int(lecture_s)
@@ -1942,13 +1970,13 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if progress and progress.get("completed_at"):
             await query.answer("تم تسجيل مشاهدتك للمحاضرة بنجاح مسبقاً.",show_alert=True); return
         if not progress or not progress.get("opened_at"):
-            await query.answer("افتح المحاضرة أولاً ثم ارجع بعد مشاهدتها.",show_alert=True); return
+            await query.answer("افتح المحاضرة أولاً ثم ارجع بعد دراستها.",show_alert=True); return
         elapsed=(datetime.now(progress["opened_at"].tzinfo)-progress["opened_at"]).total_seconds()
         required=MIN_LECTURE_WATCH_MINUTES*60
         if elapsed<required:
             remain=max(1,int((required-elapsed+59)//60)); await query.answer(f"لا يمكن اعتمادها الآن. بقي نحو {remain} دقيقة من وقت التحقق.",show_alert=True); return
-        kb=InlineKeyboardMarkup([[InlineKeyboardButton("✅ نعم، شاهدتها كاملة",callback_data=f"prepverify|{chapter}|{lecture}")],[InlineKeyboardButton("↩️ العودة للمحاضرة",callback_data=f"prepopen|{chapter}|{lecture}")]])
-        await query.edit_message_text(bold("🔍 تحقق الإكمال\nهل شاهدت المحاضرة كاملة وفهمت أفكارها الأساسية؟\nسيُسجل هذا الإقرار في متابعتك الدراسية."),parse_mode=ParseMode.HTML,reply_markup=kb); return
+        kb=InlineKeyboardMarkup([[InlineKeyboardButton("✅ نعم، درستها كاملة",callback_data=f"prepverify|{chapter}|{lecture}")],[InlineKeyboardButton("↩️ العودة للمحاضرة",callback_data=f"prepopen|{chapter}|{lecture}")]])
+        await query.edit_message_text(bold("🔍 تحقق الإكمال\nهل درست الصفحات المطلوبة كاملة وفهمت أفكارها الأساسية؟\nسيُسجل هذا الإقرار في متابعتك الدراسية."),parse_mode=ParseMode.HTML,reply_markup=kb); return
     if data.startswith("prepverify|"):
         if admin: return
         _,chapter_s,lecture_s=data.split("|"); chapter,lecture=int(chapter_s),int(lecture_s)
@@ -1964,10 +1992,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         rows.append([back_menu()])
         extra="\n\n🎉 مبروك! أنهيت محاضرة متراكمة وحولت جزءاً من التأخير إلى إنجاز حقيقي. هل أنت جاهز لامتحانها؟" if backlog_done else ""
         xp_text="\n⭐ حصلت على 15 XP لإكمال التحضير اليومي كاملاً." if prep_award and prep_award.get("awarded") else ""
-        await query.edit_message_text(bold(f"✅ أحسنت! تم تسجيل إكمال الفصل {chapter} – المحاضرة {lecture}.{xp_text}{extra}"),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup(rows))
+        await query.edit_message_text(bold(f"✅ أحسنت! تم تسجيل إكمال الباب {chapter} – المحاضرة {lecture}.{xp_text}{extra}"),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup(rows))
         s=await get_student(uid)
         for p in await student_parents(uid,True):
-            try: await context.bot.send_message(p["parent_chat_id"],bold(f"🌟 إنجاز دراسي جديد\nأكمل الطالب {s['full_name']} محاضرة الكيمياء رقم {lecture} من الفصل {chapter}."),parse_mode=ParseMode.HTML)
+            try: await context.bot.send_message(p["parent_chat_id"],bold(f"🌟 إنجاز دراسي جديد\nأكمل الطالب {s['full_name']} محاضرة اللغة العربية رقم {lecture} من الباب {chapter}."),parse_mode=ParseMode.HTML)
             except TelegramError: pass
         return
     if data=="backlog_auto":
@@ -1991,7 +2019,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("◀️ المحاضرات المتراكمة",callback_data="backlog_auto"),back_menu()]
         ])
         item=PLAYLISTS[chapter][lecture-1]
-        await query.edit_message_text(bold(f"📚 محاضرة متراكمة\n\n📘 الفصل {chapter}\n🎬 المحاضرة {lecture}\n{item[1]}\n\nيمكنك إكمالها بمشاهدتها من البوت، أو الضغط على «أكملت تراكمي» لإرسال القسم الجاهز للنسخ."),parse_mode=ParseMode.HTML,reply_markup=kb); return
+        await query.edit_message_text(bold(f"📚 محاضرة متراكمة\n\n📘 الباب {chapter}\n🎬 المحاضرة {lecture}\n{item[1]}\n\nيمكنك إكمالها بمشاهدتها من البوت، أو الضغط على «أكملت تراكمي» لإرسال القسم الجاهز للنسخ."),parse_mode=ParseMode.HTML,reply_markup=kb); return
     if data.startswith("backlogoath|"):
         _,chapter_s,lecture_s=data.split("|"); chapter,lecture=int(chapter_s),int(lecture_s)
         context.user_data["awaiting_private_study_oath"]={"chapter":chapter,"lecture":lecture,"from_backlog":True}
@@ -1999,21 +2027,21 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(bold("✍️ إكمال محاضرة متراكمة من مصدر خاص\n\nانسخ القسم التالي حرفياً ثم أرسله إلى البوت في رسالة واحدة:\n\n")+f"<code>{escape(PRIVATE_STUDY_OATH)}</code>",parse_mode=ParseMode.HTML,reply_markup=kb); return
     if data=="backlog_menu":
         items=await backlog_items(uid)
-        kb=[[InlineKeyboardButton(f"📘 الفصل {i}",callback_data=f"backlogchapter|{i}")] for i in range(1,8)]
+        kb=[[InlineKeyboardButton(f"📘 الباب {i}",callback_data=f"backlogchapter|{i}")] for i in range(1,6)]
         kb.append([InlineKeyboardButton(f"🗓 تحديد موعد إنهاء التراكم ({len(items)})",callback_data="backlogplan")])
         kb.append([back_menu()])
-        await query.edit_message_text(bold(f"📈 حل تراكماتي\n━━━━━━━━━━━━━━━━━━\nاختر الفصل ثم اضغط المحاضرات المتراكمة عليك.\nعدد المحاضرات المسجلة حالياً: {len(items)}"),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup(kb)); return
+        await query.edit_message_text(bold(f"📈 حل تراكماتي\n━━━━━━━━━━━━━━━━━━\nاختر الباب ثم اضغط المحاضرات المتراكمة عليك.\nعدد المحاضرات المسجلة حالياً: {len(items)}"),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup(kb)); return
     if data.startswith("backlogchapter|"):
         chapter=int(data.split("|")[1]); selected={(x["chapter"],x["lecture"]) for x in await backlog_items(uid)}; lectures=PLAYLISTS[chapter]; kb=[]
         for i in range(0,len(lectures),3):
             kb.append([InlineKeyboardButton(("✅ " if (chapter,x[0]) in selected else "➕ ")+str(x[0]),callback_data=f"backlogtoggle|{chapter}|{x[0]}") for x in lectures[i:i+3]])
-        kb.append([InlineKeyboardButton("◀️ رجوع للفصول",callback_data="backlog_menu"),back_menu()])
-        await query.edit_message_text(bold(f"📘 الفصل {chapter}\nاضغط رقم المحاضرة لإضافتها أو إزالتها من تراكماتك:"),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup(kb)); return
+        kb.append([InlineKeyboardButton("◀️ رجوع للوحدات",callback_data="backlog_menu"),back_menu()])
+        await query.edit_message_text(bold(f"📘 الباب {chapter}\nاضغط رقم المحاضرة لإضافتها أو إزالتها من تراكماتك:"),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup(kb)); return
     if data.startswith("backlogtoggle|"):
         _,chapter_s,lecture_s=data.split("|"); chapter,lecture=int(chapter_s),int(lecture_s); await toggle_backlog(uid,chapter,lecture)
         selected={(x["chapter"],x["lecture"]) for x in await backlog_items(uid)}; lectures=PLAYLISTS[chapter]; kb=[]
         for i in range(0,len(lectures),3): kb.append([InlineKeyboardButton(("✅ " if (chapter,x[0]) in selected else "➕ ")+str(x[0]),callback_data=f"backlogtoggle|{chapter}|{x[0]}") for x in lectures[i:i+3]])
-        kb.append([InlineKeyboardButton("◀️ رجوع للفصول",callback_data="backlog_menu"),back_menu()])
+        kb.append([InlineKeyboardButton("◀️ رجوع للوحدات",callback_data="backlog_menu"),back_menu()])
         await query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(kb)); return
     if data=="backlogplan":
         rows=await backlog_items(uid)
@@ -2061,7 +2089,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         _,chapter_s,lecture_s=data.split("|"); chapter,lecture=int(chapter_s),int(lecture_s); rows=await archive_exams_by_lecture(chapter,lecture)
         if not rows: await query.answer("لا يوجد امتحان سابق مربوط بهذه المحاضرة حالياً.",show_alert=True); return
         exam=rows[0]; media=await get_archive_exam_media(exam["id"])
-        await query.edit_message_text(bold(f"📝 امتحان المحاضرة {lecture} — الفصل {chapter}\n{exam['title']}"),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup([[back_menu()]]))
+        await query.edit_message_text(bold(f"📝 امتحان المحاضرة {lecture} — الباب {chapter}\n{exam['title']}"),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup([[back_menu()]]))
         for index,item in enumerate(media):
             caption=bold(exam["title"]) if index==0 else None
             if item["payload_type"]=="photo": await context.bot.send_photo(uid,item["file_id"],caption=caption,parse_mode=ParseMode.HTML if caption else None)
@@ -2069,25 +2097,25 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else: await context.bot.send_video(uid,item["file_id"],caption=caption,parse_mode=ParseMode.HTML if caption else None)
         return
     if data=="past_exams":
-        kb=InlineKeyboardMarkup([[InlineKeyboardButton(f"📘 الفصل {i}",callback_data=f"archivechapter|{i}")] for i in range(1,8)]+[[back_menu()]])
-        await query.edit_message_text(bold("🗂 الامتحانات السابقة\nاختر الفصل:"),parse_mode=ParseMode.HTML,reply_markup=kb); return
+        kb=InlineKeyboardMarkup([[InlineKeyboardButton(f"📘 الباب {i}",callback_data=f"archivechapter|{i}")] for i in range(1,6)]+[[back_menu()]])
+        await query.edit_message_text(bold("🗂 الامتحانات السابقة\nاختر الباب:"),parse_mode=ParseMode.HTML,reply_markup=kb); return
     if data.startswith("archivechapter|"):
         chapter=int(data.split("|")[1]); lectures=await archive_lectures(chapter); legacy=[r for r in await archive_exams(chapter) if not r.get("lecture")]
         kb=[[InlineKeyboardButton(f"🎬 المحاضرة {lecture}",callback_data=f"archivelecture|{chapter}|{lecture}")] for lecture in lectures]
         kb.extend([[InlineKeyboardButton(f"📝 {row['title']}",callback_data=f"archiveexam|{row['id']}")] for row in legacy])
         if admin: kb.append([InlineKeyboardButton("➕ إضافة امتحان سابق",callback_data=f"addarchive|{chapter}")])
-        kb.append([InlineKeyboardButton("◀️ الفصول",callback_data="past_exams"),back_menu()])
-        text=f"📘 امتحانات الفصل {chapter}\nاختر المحاضرة:" if (lectures or legacy) else f"📭 لا توجد امتحانات مضافة للفصل {chapter}."
+        kb.append([InlineKeyboardButton("◀️ الأبواب",callback_data="past_exams"),back_menu()])
+        text=f"📘 امتحانات الباب {chapter}\nاختر المحاضرة:" if (lectures or legacy) else f"📭 لا توجد امتحانات مضافة للوحدة {chapter}."
         await query.edit_message_text(bold(text),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup(kb)); return
     if data.startswith("archivelecture|"):
         _,chapter_s,lecture_s=data.split("|"); chapter,lecture=int(chapter_s),int(lecture_s); rows=await archive_exams_by_lecture(chapter,lecture)
         kb=[[InlineKeyboardButton(f"📝 {row['title']}",callback_data=f"archiveexam|{row['id']}")] for row in rows]
         kb.append([InlineKeyboardButton("◀️ المحاضرات",callback_data=f"archivechapter|{chapter}"),back_menu()])
-        await query.edit_message_text(bold(f"🎬 الفصل {chapter} — المحاضرة {lecture}\nاختر الامتحان:"),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup(kb)); return
+        await query.edit_message_text(bold(f"🎬 الباب {chapter} — المحاضرة {lecture}\nاختر الامتحان:"),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup(kb)); return
     if data.startswith("archiveexam|"):
         archive_id=int(data.split("|")[1]); exam=await get_archive_exam(archive_id); media=await get_archive_exam_media(archive_id)
         if not exam: await query.answer("الامتحان غير موجود",show_alert=True); return
-        await query.edit_message_text(bold(f"📝 {exam['title']}\n📘 الفصل {exam['chapter']}"),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("◀️ رجوع",callback_data=f"archivechapter|{exam['chapter']}"),back_menu()]]))
+        await query.edit_message_text(bold(f"📝 {exam['title']}\n📘 الباب {exam['chapter']}"),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("◀️ رجوع",callback_data=f"archivechapter|{exam['chapter']}"),back_menu()]]))
         for index,item in enumerate(media):
             caption=bold(exam["title"]) if index==0 else None
             if item["payload_type"]=="photo": await context.bot.send_photo(uid,item["file_id"],caption=caption,parse_mode=ParseMode.HTML if caption else None)
@@ -2103,22 +2131,22 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(bold("📚 اختر القسم المطلوب:"),parse_mode=ParseMode.HTML,reply_markup=kb); return
     if data.startswith("resourcecategory|"):
         category=data.split("|")[1]
-        kb=[[InlineKeyboardButton(f"📘 الفصل {i}",callback_data=f"resourcechapter|{category}|{i}")] for i in range(1,8)]
+        kb=[[InlineKeyboardButton(f"📘 الباب {i}",callback_data=f"resourcechapter|{category}|{i}")] for i in range(1,6)]
         kb.append([InlineKeyboardButton("◀️ رجوع",callback_data="study_resources" if category!="model_answer" else "menu"),back_menu()])
-        await query.edit_message_text(bold(f"{RESOURCE_LABELS[category]}\nاختر الفصل:"),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup(kb)); return
+        await query.edit_message_text(bold(f"{RESOURCE_LABELS[category]}\nاختر الباب:"),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup(kb)); return
     if data.startswith("resourcechapter|"):
         _,category,chapter_s=data.split("|"); chapter=int(chapter_s); rows=await resources_by_chapter(category,chapter)
         kb=[[InlineKeyboardButton(f"📄 {row['title']}",callback_data=f"resourceitem|{row['id']}")] for row in rows]
         if admin: kb.append([InlineKeyboardButton("➕ إضافة ملف جديد",callback_data=f"addresource|{category}|{chapter}")])
-        kb.append([InlineKeyboardButton("◀️ الفصول",callback_data=f"resourcecategory|{category}"),back_menu()])
-        text=f"{RESOURCE_LABELS[category]} | الفصل {chapter}" if rows else f"📭 لا توجد ملفات في الفصل {chapter}."
+        kb.append([InlineKeyboardButton("◀️ الأبواب",callback_data=f"resourcecategory|{category}"),back_menu()])
+        text=f"{RESOURCE_LABELS[category]} | الباب {chapter}" if rows else f"📭 لا توجد ملفات في الباب {chapter}."
         await query.edit_message_text(bold(text),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup(kb)); return
     if data.startswith("resourceitem|"):
         resource_id=int(data.split("|")[1]); resource=await get_resource(resource_id); media=await get_resource_media(resource_id)
         if not resource: return
         if resource["category"]=="model_answer" and not (admin or (student and student["approved"])):
             await query.answer("الإجابات النموذجية مخصصة لطلاب الدورة.",show_alert=True); return
-        await query.edit_message_text(bold(f"📄 {resource['title']}\n📘 الفصل {resource['chapter']}"),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("◀️ رجوع",callback_data=f"resourcechapter|{resource['category']}|{resource['chapter']}"),back_menu()]]))
+        await query.edit_message_text(bold(f"📄 {resource['title']}\n📘 الباب {resource['chapter']}"),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("◀️ رجوع",callback_data=f"resourcechapter|{resource['category']}|{resource['chapter']}"),back_menu()]]))
         for index,item in enumerate(media):
             caption=bold(resource["title"]) if index==0 else None
             if item["payload_type"]=="photo": await context.bot.send_photo(uid,item["file_id"],caption=caption,parse_mode=ParseMode.HTML if caption else None)
@@ -2126,27 +2154,31 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             elif item["payload_type"]=="video": await context.bot.send_video(uid,item["file_id"],caption=caption,parse_mode=ParseMode.HTML if caption else None)
         return
     if data=="playlists":
-        kb=InlineKeyboardMarkup([[InlineKeyboardButton(f"📘 الفصل {i}",callback_data=f"chapter|{i}")] for i in range(1,8)]+[[back_menu()]])
-        await query.edit_message_text(bold("🎬 اختر الفصل:"),parse_mode=ParseMode.HTML,reply_markup=kb); return
+        kb=InlineKeyboardMarkup([[InlineKeyboardButton(f"📘 الباب {i}",callback_data=f"chapter|{i}")] for i in range(1,6)]+[[back_menu()]])
+        await query.edit_message_text(bold("🎬 اختر الباب:"),parse_mode=ParseMode.HTML,reply_markup=kb); return
     if data.startswith("chapter|"):
         ch=int(data.split("|")[1]); lectures=PLAYLISTS[ch]; kb=[]
         for i in range(0,len(lectures),4): kb.append([InlineKeyboardButton(str(x[0]),callback_data=f"lecture|{ch}|{x[0]}") for x in lectures[i:i+4]])
-        kb.append([InlineKeyboardButton("◀️ الفصول",callback_data="playlists"),back_menu()]); await query.edit_message_text(bold(f"🎬 الفصل {ch} | اختر المحاضرة:"),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup(kb)); return
+        kb.append([InlineKeyboardButton("◀️ الأبواب",callback_data="playlists"),back_menu()]); await query.edit_message_text(bold(f"🎬 الباب {ch} | اختر المحاضرة:"),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup(kb)); return
     if data.startswith("lecture|"):
         _,ch_s,no_s=data.split("|"); ch,no=int(ch_s),int(no_s); item=PLAYLISTS[ch][no-1]
         text=bold(f"🎬 المحاضرة رقم ({no})\n📌 موضوع المحاضرة:\n{item[1]}")
-        kb=InlineKeyboardMarkup([[InlineKeyboardButton("▶️ فتح المحاضرة",url=item[2])],[InlineKeyboardButton("◀️ رجوع للمحاضرات",callback_data=f"chapter|{ch}"),back_menu()]])
+        rows=[[InlineKeyboardButton("▶️ فتح المحاضرة",**page_button_target(item),style='success')]]
+        for title,url in LECTURE_SUPPLEMENTS.get((ch,no),[]):
+            rows.append([InlineKeyboardButton(f"📎 {title}",url=url,style='primary')])
+        rows.append([InlineKeyboardButton("◀️ رجوع للمحاضرات",callback_data=f"chapter|{ch}",style='primary'),back_menu()])
+        kb=InlineKeyboardMarkup(rows)
         await query.edit_message_text(text,parse_mode=ParseMode.HTML,reply_markup=kb); return
     if data=="profile":
         if admin:
             await query.edit_message_text(bold("👑 حساب إداري معتمد\nلا يحتاج إلى تسجيل أو موافقة تفعيل."),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup([[back_menu()]])); return
         s=await get_student(uid)
-        track = "الدورة الحالية" if s.get("study_track")=="course" else f"الفصل {s.get('current_chapter') or '-'}"
+        track = "الدورة الحالية" if s.get("study_track")=="course" else f"الباب {s.get('current_chapter') or '-'}"
         sched=await student_schedule(uid)
         names=["الاثنين","الثلاثاء","الأربعاء","الخميس","الجمعة","السبت","الأحد"]
         schedule_text="منتظم" if not sched or sched.get("schedule_mode")!="custom" else f"شخصي — {', '.join(names[i] for i in (sched.get('study_days') or []))}"
         text=bold(f"👤 ملفي الشخصي\n\nالاسم: {s['full_name']}\nالمدرسة: {s['school']}\nالمعدل المطلوب: {s['target_grade']}\n📚 مسار الدراسة: {track}\n🗓️ نظام الجدول: {schedule_text}\n\n⚠️ إنذاراتي: {s['warnings']}/{MAX_WARNINGS}\n⭐ نقاطي: {s['xp']} XP")
-        kb=InlineKeyboardMarkup([[InlineKeyboardButton("📚 تغيير فصل البداية",callback_data="profile_change_chapter")],
+        kb=InlineKeyboardMarkup([[InlineKeyboardButton("📚 تغيير وحدة البداية",callback_data="profile_change_chapter")],
                                  [InlineKeyboardButton("✏️ تعديل المعلومات",callback_data="edit_profile")],[back_menu()]])
         await query.edit_message_text(text,parse_mode=ParseMode.HTML,reply_markup=kb); return
     if data=="parent_link":
@@ -2201,10 +2233,10 @@ async def private_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
         rows.append([back_menu()])
         xp_text="\n⭐ حصلت على 15 XP لإكمال التحضير اليومي كاملاً." if prep_award and prep_award.get("awarded") else ""
         extra="\n\n🎉 مبروك! أنهيت محاضرة متراكمة. هل أنت جاهز لامتحانها؟" if backlog_done else ""
-        await update.effective_message.reply_text(bold(f"✅ تم حفظ قسمك وتسجيل دراسة الفصل {chapter} – المحاضرة {lecture} من مصدرك الخاص.{xp_text}{extra}"),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup(rows))
+        await update.effective_message.reply_text(bold(f"✅ تم حفظ قسمك وتسجيل دراسة الباب {chapter} – المحاضرة {lecture} من مصدرك الخاص.{xp_text}{extra}"),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup(rows))
         student_row=await get_student(update.effective_user.id)
         for parent in await student_parents(update.effective_user.id,True):
-            try: await context.bot.send_message(parent["parent_chat_id"],bold(f"🌟 إنجاز دراسي جديد\nأكمل الطالب {student_row['full_name']} محاضرة الكيمياء رقم {lecture} من الفصل {chapter} من مصدره الدراسي الخاص بعد إرسال الإقرار."),parse_mode=ParseMode.HTML)
+            try: await context.bot.send_message(parent["parent_chat_id"],bold(f"🌟 إنجاز دراسي جديد\nأكمل الطالب {student_row['full_name']} محاضرة اللغة العربية رقم {lecture} من الباب {chapter} من مصدره الدراسي الخاص بعد إرسال الإقرار."),parse_mode=ParseMode.HTML)
             except TelegramError: pass
         return
     if context.user_data.get("awaiting_reopen_hours") and is_admin(update.effective_user.id):
@@ -2245,15 +2277,15 @@ async def private_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
             lines=["📈 جدول إنهاء التراكمات",DIV,f"🎯 موعد الإكمال: {target.strftime('%d/%m/%Y')}"]
             for row in rows:
                 item=PLAYLISTS[row["chapter"]][row["lecture"]-1]
-                lines.append(f"📅 {row['planned_date'].strftime('%d/%m')} | 🎬 الفصل {row['chapter']} – المحاضرة {row['lecture']}\n🔗 {item[2]}")
+                lines.append(f"📅 {row['planned_date'].strftime('%d/%m')} | 🎬 الباب {row['chapter']} – المحاضرة {row['lecture']}\n🔗 {item[2]}")
             await update.effective_message.reply_text(bold("\n\n".join(lines)),parse_mode=ParseMode.HTML,reply_markup=main_menu()); return
         student=await get_student(update.effective_user.id)
         if not student or not (student.get("study_track")=="chapter" or student.get("schedule_mode")=="custom"):
-            await update.effective_message.reply_text(bold("ℹ️ نظام الإجازات الأربع شهرياً متاح للطلاب على جدول شخصي أو مسار فصل مستقل."),parse_mode=ParseMode.HTML); return
+            await update.effective_message.reply_text(bold("ℹ️ نظام الإجازات الأربع شهرياً متاح للطلاب على جدول شخصي أو مسار وحدة مستقل."),parse_mode=ParseMode.HTML); return
         if await leave_month_usage(update.effective_user.id,target)>=4:
             await update.effective_message.reply_text(bold("⚠️ استنفدت 4 إجازات لهذا الشهر."),parse_mode=ParseMode.HTML); return
         result=await create_leave_request(update.effective_user.id,target)
-        if result["status"]=="track": await update.effective_message.reply_text(bold("ℹ️ الإجازات الأربع شهرياً مخصصة لمسار الفصل فقط."),parse_mode=ParseMode.HTML); return
+        if result["status"]=="track": await update.effective_message.reply_text(bold("ℹ️ الإجازات الأربع شهرياً مخصصة لمسار الباب فقط."),parse_mode=ParseMode.HTML); return
         if result["status"]=="limit": await update.effective_message.reply_text(bold("⚠️ استنفدت 4 إجازات لهذا الشهر."),parse_mode=ParseMode.HTML); return
         if result["status"]=="xp": await update.effective_message.reply_text(bold("⚠️ تحتاج 400 XP لطلب الإجازة."),parse_mode=ParseMode.HTML); return
         if result["status"]!="ok": await update.effective_message.reply_text(bold("⚠️ يوجد طلب لهذا اليوم مسبقاً."),parse_mode=ParseMode.HTML); return
@@ -2281,8 +2313,8 @@ async def warn_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.effective_message.reply_text(bold(f"✅ أصبح لدى الطالب {count}/{MAX_WARNINGS} إنذارات."),parse_mode=ParseMode.HTML)
     student=await get_student(uid)
     if student: await notify_student_and_parent(context.bot,student,f"⚠️ إنذار إداري ({count}/{MAX_WARNINGS})\nالسبب: {reason}")
-    if count>=MAX_WARNINGS and CHEMISTRY_GROUP_ID:
-        try: await context.bot.ban_chat_member(CHEMISTRY_GROUP_ID,uid)
+    if count>=MAX_WARNINGS and ARABIC_GROUP_ID:
+        try: await context.bot.ban_chat_member(ARABIC_GROUP_ID,uid)
         except TelegramError: pass
 
 
@@ -2356,7 +2388,7 @@ async def ban_student_command(update: Update,context: ContextTypes.DEFAULT_TYPE)
     try: student_id=int(context.args[0])
     except ValueError: return
     try:
-        await context.bot.ban_chat_member(CHEMISTRY_GROUP_ID,student_id)
+        await context.bot.ban_chat_member(ARABIC_GROUP_ID,student_id)
         await update.effective_message.reply_text(bold("✅ تم حظر الطالب يدوياً من الدورة."),parse_mode=ParseMode.HTML)
     except TelegramError as exc: await update.effective_message.reply_text(bold(f"⚠️ تعذر الحظر: {exc}"),parse_mode=ParseMode.HTML)
 
@@ -2391,7 +2423,7 @@ async def prep_add_command(update: Update,context: ContextTypes.DEFAULT_TYPE):
 
 async def set_cumulative_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id): return
-    if len(context.args)<3: await update.effective_message.reply_text(bold("الاستخدام: /set_cumulative 30/8/2026 20:00 الفصل الثالث محاضرات 1-10"),parse_mode=ParseMode.HTML); return
+    if len(context.args)<3: await update.effective_message.reply_text(bold("الاستخدام: /set_cumulative 30/8/2026 20:00 الباب الثالثة محاضرات 1-10"),parse_mode=ParseMode.HTML); return
     try:
         exam_at=datetime.strptime(f"{context.args[0]} {context.args[1]}","%d/%m/%Y %H:%M").replace(tzinfo=TIMEZONE)
     except ValueError: await update.effective_message.reply_text(bold("⚠️ صيغة التاريخ غير صحيحة."),parse_mode=ParseMode.HTML); return
@@ -2460,12 +2492,12 @@ async def add_previous_exam_command(update: Update,context: ContextTypes.DEFAULT
     if update.effective_chat.type!="private":
         await update.effective_message.reply_text(bold("⚠️ أرسل هذا الأمر في المحادثة الخاصة مع البوت حتى ترفع ملفات الامتحان بأمان."),parse_mode=ParseMode.HTML); return
     if len(context.args)<2:
-        await update.effective_message.reply_text(bold("الاستخدام القديم ما زال يعمل:\n/add_previous_exam رقم_الفصل اسم الامتحان\n\nوالترتيب الجديد حسب المحاضرة:\n/add_previous_exam رقم_الفصل رقم_المحاضرة اسم الامتحان"),parse_mode=ParseMode.HTML); return
+        await update.effective_message.reply_text(bold("الاستخدام القديم ما زال يعمل:\n/add_previous_exam رقم_الباب اسم الامتحان\n\nوالترتيب الجديد حسب المحاضرة:\n/add_previous_exam رقم_الباب رقم_المحاضرة اسم الامتحان"),parse_mode=ParseMode.HTML); return
     try:
         chapter=int(context.args[0])
-        if not 1<=chapter<=7: raise ValueError
+        if not 1<=chapter<=5: raise ValueError
     except ValueError:
-        await update.effective_message.reply_text(bold("⚠️ رقم الفصل يجب أن يكون من 1 إلى 7."),parse_mode=ParseMode.HTML); return
+        await update.effective_message.reply_text(bold("⚠️ رقم الباب يجب أن يكون من 1 إلى 5."),parse_mode=ParseMode.HTML); return
     lecture=None
     if len(context.args)>=3 and context.args[1].isdigit():
         lecture=int(context.args[1])
@@ -2475,23 +2507,24 @@ async def add_previous_exam_command(update: Update,context: ContextTypes.DEFAULT
     else: title=" ".join(context.args[1:]).strip()
     archive=await create_archive_exam(chapter,title,update.effective_user.id,lecture)
     context.user_data["waiting_archive_id"]=archive["id"]
-    await update.effective_message.reply_text(bold(f"🗂 تم إنشاء «{title}» في الفصل {chapter}.\nأرسل الآن الصور أو ملف PDF، ثم اضغط إنهاء وحفظ."),parse_mode=ParseMode.HTML)
+    await update.effective_message.reply_text(bold(f"🗂 تم إنشاء «{title}» في الباب {chapter}.\nأرسل الآن الصور أو ملف PDF، ثم اضغط إنهاء وحفظ."),parse_mode=ParseMode.HTML)
 
 
 async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if is_admin(update.effective_user.id):
-        await update.effective_message.reply_text(bold("👑 مركز ادارة الكيمياء\n━━━━━━━━━━━━━━━━━━\nاختر القسم الذي تريد ادارته"),parse_mode=ParseMode.HTML,reply_markup=main_menu(True)); return
+        await update.effective_message.reply_text(bold("👑 مركز ادارة اللغة العربية\n━━━━━━━━━━━━━━━━━━\nاختر القسم الذي تريد ادارته"),parse_mode=ParseMode.HTML,reply_markup=main_menu(True)); return
     student=await get_student(update.effective_user.id)
     if not student or not student["approved"]: await start(update,context); return
     if not student.get("parent_chat_id"):
         await update.effective_message.reply_text(bold(f"🔒 يجب ربط ولي الأمر أولاً.\nرمزك: {student['parent_link_code']}\nولي الأمر ينسخ ويرسل:")+f"\n<code>/parent {escape(student['parent_link_code'])}</code>",parse_mode=ParseMode.HTML,reply_markup=parent_copy_markup(student["parent_link_code"])); return
     if not await is_channel_member(context.bot,update.effective_user.id):
         await update.effective_message.reply_text(bold("🔒 يجب الاشتراك بقناة منصة المجتهد أولاً."),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📢 الاشتراك بالقناة",url=REQUIRED_CHANNEL_URL)]])); return
-    await update.effective_message.reply_text(bold(f"🧪 منصة المجتهد | الكيمياء\n━━━━━━━━━━━━━━━━━━\nاهلا {student['full_name']} 👋\n🎯 جلسة اليوم تختار لك الخطوة الاهم تلقائيا"),parse_mode=ParseMode.HTML,reply_markup=main_menu())
+    await update.effective_message.reply_text(bold(f"⚡ بوت اللغة العربية | منصة المجتهد التعليمية\n━━━━━━━━━━━━━━━━━━\nأهلا {student['full_name']} 👋\n🎯 مهامي اليومية تختار لك الخطوة الأهم تلقائيا"),parse_mode=ParseMode.HTML,reply_markup=main_menu())
 
 
 async def id_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.effective_message.reply_text(bold(f"👤 معرفك: {update.effective_user.id}\n💬 معرف المحادثة: {update.effective_chat.id}\n📂 معرف الموضوع: {update.effective_message.message_thread_id or 0}"),parse_mode=ParseMode.HTML)
+    uid=update.effective_user.id
+    await update.effective_message.reply_text(bold(f"👤 معرفك: {uid}\n🔐 صلاحيتك: {'أدمن' if is_admin(uid) else 'طالب/ولي أمر'}\n💬 معرف المحادثة: {update.effective_chat.id}\n📂 معرف الموضوع: {update.effective_message.message_thread_id or 0}"),parse_mode=ParseMode.HTML)
 
 
 async def deadline_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2530,16 +2563,16 @@ async def prep_date_command(update: Update,context: ContextTypes.DEFAULT_TYPE):
 async def chapter_end_command(update: Update,context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id): return
     if len(context.args)<2:
-        await update.effective_message.reply_text(bold("الاستخدام: /chapter_end 3 30/9/2026\nللفصول من 3 إلى 7."),parse_mode=ParseMode.HTML); return
+        await update.effective_message.reply_text(bold("الاستخدام: /chapter_end 3 30/9/2026\nللوحدات من 1 إلى 5."),parse_mode=ParseMode.HTML); return
     try:
         chapter=int(context.args[0])
-        if not 3<=chapter<=7: raise ValueError
+        if not 1<=chapter<=5: raise ValueError
         target=datetime.strptime(context.args[1],"%d/%m/%Y").date()
     except ValueError:
-        await update.effective_message.reply_text(bold("⚠️ أرسل رقم فصل من 3 إلى 7 وتاريخاً بالصيغة 30/9/2026."),parse_mode=ParseMode.HTML); return
+        await update.effective_message.reply_text(bold("⚠️ أرسل رقم وحدة من 1 إلى 5 وتاريخاً بالصيغة 30/9/2026."),parse_mode=ParseMode.HTML); return
     value=target.strftime("%d/%m/%Y")
     await set_setting_value(f"chapter_{chapter}_completion",value)
-    await update.effective_message.reply_text(bold(f"✅ تم تحديد موعد إكمال الفصل {chapter}: {value}"),parse_mode=ParseMode.HTML)
+    await update.effective_message.reply_text(bold(f"✅ تم تحديد موعد إكمال الباب {chapter}: {value}"),parse_mode=ParseMode.HTML)
 
 
 async def reopen_exam_command(update: Update,context: ContextTypes.DEFAULT_TYPE):
@@ -2595,61 +2628,29 @@ def period_metrics(rows):
     return {"total":total,"submitted":submitted,"completion":completion,"average":average,"score":score}
 
 
-def build_weekly_pdf(bundle,current_start,current_end):
-    buffer=BytesIO()
-    font_path=os.getenv("REPORT_FONT_PATH","/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf")
-    font_name="ArabicReport"
-    if font_name not in pdfmetrics.getRegisteredFontNames(): pdfmetrics.registerFont(TTFont(font_name,font_path))
-    styles=getSampleStyleSheet()
-    title=ParagraphStyle("ArabicTitle",parent=styles["Title"],fontName=font_name,fontSize=18,leading=26,alignment=TA_CENTER,textColor=colors.HexColor("#14532d"))
-    heading=ParagraphStyle("ArabicHeading",parent=styles["Heading2"],fontName=font_name,fontSize=13,leading=20,alignment=TA_RIGHT,textColor=colors.HexColor("#166534"))
-    body=ParagraphStyle("ArabicBody",parent=styles["BodyText"],fontName=font_name,fontSize=10,leading=16,alignment=TA_RIGHT)
-    doc=SimpleDocTemplate(buffer,pagesize=A4,rightMargin=34,leftMargin=34,topMargin=32,bottomMargin=32)
-    student=bundle["student"]; current=bundle["current"]; warnings=bundle["warnings"]
-    now_metrics=period_metrics(current); previous_metrics=period_metrics(bundle["previous"])
-    if previous_metrics["score"]:
-        change=round((now_metrics["score"]-previous_metrics["score"])*100/previous_metrics["score"],1)
-        comparison=(f"ازداد الأداء بنسبة {change}% عن الأسبوع السابق" if change>=0 else f"انخفض الأداء بنسبة {abs(change)}% عن الأسبوع السابق")
-    else: comparison="لا تتوفر بيانات كافية للمقارنة مع الأسبوع السابق"
-    achievements=[]
-    if now_metrics["total"] and now_metrics["submitted"]==now_metrics["total"]: achievements.append("أكمل جميع الواجبات والامتحانات المطلوبة")
-    if now_metrics["average"] is not None and now_metrics["average"]>=90: achievements.append("حقق معدلاً ممتازاً في الامتحانات")
-    if not warnings: achievements.append("أسبوع كامل بلا إنذارات")
-    if not achievements: achievements.append("لا توجد إنجازات خاصة مسجلة هذا الأسبوع")
-    story=[Paragraph(rtl("منصة المجتهد التعليمية"),title),Paragraph(rtl("التقرير الأسبوعي لأداء الطالب"),heading),Spacer(1,8)]
-    info=[[rtl("الفترة"),f"{current_start.strftime('%d/%m/%Y')} - {current_end.strftime('%d/%m/%Y')}"],[rtl("اسم الطالب"),rtl(student["full_name"])],[rtl("المدرسة"),rtl(student["school"])],[rtl("نسبة الإنجاز"),f"{now_metrics['completion']}%"],[rtl("معدل درجات الامتحانات"),f"{now_metrics['average']}/100" if now_metrics["average"] is not None else rtl("لا توجد درجة")],[rtl("المقارنة"),rtl(comparison)],[rtl("مجموع النقاط"),f"{student['xp']} XP"],[rtl("مجموع الإنذارات"),f"{student['warnings']}/{MAX_WARNINGS}"]]
-    table=Table(info,colWidths=[170,340],hAlign="RIGHT")
-    table.setStyle(TableStyle([("FONTNAME",(0,0),(-1,-1),font_name),("FONTSIZE",(0,0),(-1,-1),10),("ALIGN",(0,0),(-1,-1),"RIGHT"),("GRID",(0,0),(-1,-1),0.5,colors.HexColor("#d1d5db")),("BACKGROUND",(0,0),(0,-1),colors.HexColor("#dcfce7")),("VALIGN",(0,0),(-1,-1),"MIDDLE"),("BOTTOMPADDING",(0,0),(-1,-1),7),("TOPPADDING",(0,0),(-1,-1),7)]))
-    story.extend([table,Spacer(1,14),Paragraph(rtl("تفاصيل واجبات وامتحانات هذا الأسبوع"),heading)])
-    task_data=[[rtl("الحالة"),rtl("الدرجة"),rtl("النوع"),rtl("العنوان")]]
-    for row in current:
-        status=rtl("تم التسليم") if row["submitted_at"] else rtl("لم يسلّم")
-        grade=f"{row['grade']}/100" if row["grade"] is not None else "-"
-        kind=rtl("واجب") if row["kind"]=="homework" else rtl("امتحان")
-        task_data.append([status,grade,kind,rtl(row["title"])])
-    if len(task_data)==1: task_data.append(["-","-","-",rtl("لا توجد مطلوبات خلال هذا الأسبوع")])
-    tasks_table=Table(task_data,colWidths=[90,70,75,275],repeatRows=1,hAlign="RIGHT")
-    tasks_table.setStyle(TableStyle([("FONTNAME",(0,0),(-1,-1),font_name),("FONTSIZE",(0,0),(-1,-1),9),("ALIGN",(0,0),(-1,-1),"RIGHT"),("GRID",(0,0),(-1,-1),0.5,colors.HexColor("#d1d5db")),("BACKGROUND",(0,0),(-1,0),colors.HexColor("#166534")),("TEXTCOLOR",(0,0),(-1,0),colors.white),("VALIGN",(0,0),(-1,-1),"MIDDLE"),("BOTTOMPADDING",(0,0),(-1,-1),6),("TOPPADDING",(0,0),(-1,-1),6)]))
-    story.extend([tasks_table,Spacer(1,14),Paragraph(rtl("إنذارات هذا الأسبوع"),heading)])
-    if warnings:
-        for warning in warnings: story.append(Paragraph(rtl(f"• {warning['reason']} - {warning['created_at'].astimezone(TIMEZONE).strftime('%d/%m/%Y')}"),body))
-    else: story.append(Paragraph(rtl("لا توجد إنذارات خلال هذا الأسبوع"),body))
-    story.extend([Spacer(1,12),Paragraph(rtl("الإنجازات الأسبوعية"),heading)])
-    for achievement in achievements: story.append(Paragraph(rtl(f"• {achievement}"),body))
-    story.extend([Spacer(1,18),Paragraph(rtl("منصة المجتهد التعليمية - مجانية مع الجدية"),body)])
-    doc.build(story); buffer.seek(0); return buffer
+def build_weekly_pdf(bundle,current_start,current_end,week_no=1):
+    from weekly_report_design import build_weekly_pdf as render_weekly_pdf
+    return render_weekly_pdf(bundle,current_start,current_end,metrics=period_metrics,
+                             max_warnings=MAX_WARNINGS,timezone=TIMEZONE,number=week_no)
 
 
 async def weekly_reports_job(context: ContextTypes.DEFAULT_TYPE):
     now=datetime.now(TIMEZONE)
     if now.weekday()!=4 or now.hour!=20: return
-    current_end=now; current_start=now-timedelta(days=7); previous_start=now-timedelta(days=14)
+    current_end=now.replace(minute=0,second=0,microsecond=0); current_start=current_end-timedelta(days=7); previous_start=current_end-timedelta(days=14)
     for row in await weekly_parent_reports():
         key=f"weekly_parent_report_{now.date().isoformat()}_{row['user_id']}_{row['parent_chat_id']}"
         if await setting_value(key): continue
         try:
             bundle=await parent_report_bundle(row["user_id"],current_start,current_end,previous_start)
-            pdf=build_weekly_pdf(bundle,current_start,current_end); pdf.name=f"weekly_report_{row['user_id']}_{now.date().isoformat()}.pdf"
+            from weekly_report_design import week_number
+            first_key=f"weekly_report_design_first_week_{row['user_id']}"
+            first_end=await setting_value(first_key)
+            if not first_end:
+                first_end=current_end.date().isoformat()
+                await set_setting_value(first_key,first_end)
+            week_no=week_number(first_end,current_end)
+            pdf=build_weekly_pdf(bundle,current_start,current_end,week_no)
             await context.bot.send_document(row["parent_chat_id"],pdf,caption=bold(f"📊 التقرير الأسبوعي للطالب {row['full_name']}"),parse_mode=ParseMode.HTML)
             await set_setting_value(key,"sent")
         except Exception as exc: logger.exception("Weekly PDF report failed for %s: %s",row["user_id"],exc)
@@ -2659,17 +2660,17 @@ async def post_init(app):
     init_db(); await backfill_personal_prep_numbers(CHAPTER_PREPARATION_DISTRIBUTION); await seed_preparations(preparation_rows()); await observe_known_unactivated_members(ACTIVATION_GRACE_HOURS)
     if not await setting_value("v19_onboarding_broadcast_sent"):
         for student in await students_requiring_onboarding(19):
-            try: await app.bot.send_message(student["user_id"],bold("🆕 تم تحديث بوت الكيمياء بنظام دراسي جديد.\n\nلتحديث حسابك: افتح البوت واضغط زر Start أو أرسل /start، ثم اختر الاحتفاظ بمعلوماتك أو تعديلها وحدد الفصل الذي تريد البدء منه."),parse_mode=ParseMode.HTML)
+            try: await app.bot.send_message(student["user_id"],bold("🆕 تم تحديث بوت اللغة العربية بنظام دراسي جديد.\n\nلتحديث حسابك: افتح البوت واضغط زر Start أو أرسل /start، ثم اختر الاحتفاظ بمعلوماتك أو تعديلها وحدد الباب الذي تريد البدء منه."),parse_mode=ParseMode.HTML)
             except TelegramError: pass
         await set_setting_value("v19_onboarding_broadcast_sent","sent")
-    await app.bot.set_my_commands([BotCommand("start","بدء البوت"),BotCommand("menu","القائمة الرئيسية"),BotCommand("id","عرض المعرفات"),BotCommand("parent","ربط ولي الأمر"),BotCommand("approve_parent","تفعيل ولي الأمر - إدارة"),BotCommand("msg_student","مراسلة طالب - إدارة"),BotCommand("msg_parent","مراسلة ولي أمر - إدارة"),BotCommand("publish_at","جدولة منشور - إدارة"),BotCommand("set_cumulative","تحديد التراكمي - إدارة"),BotCommand("audit_exam","تدقيق إنذارات امتحان - إدارة"),BotCommand("repair_exam_warnings","إصلاح إنذارات امتحان - إدارة"),BotCommand("prep_date","موعد التحضير - إدارة"),BotCommand("chapter_end","موعد إكمال فصل - إدارة"),BotCommand("prep_swap","تبديل التحضيرين - إدارة"),BotCommand("prep_add","إضافة تحضير - إدارة"),BotCommand("warn","إضافة إنذار - إدارة"),BotCommand("warnings","عرض إنذارات طالب - إدارة"),BotCommand("unwarn","حذف إنذار - إدارة"),BotCommand("xp","تعديل XP - إدارة"),BotCommand("ban_student","حظر طالب - إدارة"),BotCommand("grade","درجة امتحان - إدارة")])
+    await app.bot.set_my_commands([BotCommand("start","بدء البوت"),BotCommand("menu","القائمة الرئيسية"),BotCommand("id","عرض المعرفات"),BotCommand("parent","ربط ولي الأمر"),BotCommand("approve_parent","تفعيل ولي الأمر - إدارة"),BotCommand("msg_student","مراسلة طالب - إدارة"),BotCommand("msg_parent","مراسلة ولي أمر - إدارة"),BotCommand("publish_at","جدولة منشور - إدارة"),BotCommand("set_cumulative","تحديد التراكمي - إدارة"),BotCommand("audit_exam","تدقيق إنذارات امتحان - إدارة"),BotCommand("repair_exam_warnings","إصلاح إنذارات امتحان - إدارة"),BotCommand("prep_date","موعد التحضير - إدارة"),BotCommand("chapter_end","موعد إكمال وحدة - إدارة"),BotCommand("prep_swap","تبديل التحضيرين - إدارة"),BotCommand("prep_add","إضافة تحضير - إدارة"),BotCommand("warn","إضافة إنذار - إدارة"),BotCommand("warnings","عرض إنذارات طالب - إدارة"),BotCommand("unwarn","حذف إنذار - إدارة"),BotCommand("xp","تعديل XP - إدارة"),BotCommand("ban_student","حظر طالب - إدارة"),BotCommand("grade","درجة امتحان - إدارة")])
     config_warnings=[]
-    if not CHEMISTRY_GROUP_ID: config_warnings.append("CHEMISTRY_GROUP_ID غير مضبوط")
+    if not ARABIC_GROUP_ID: config_warnings.append("ARABIC_GROUP_ID غير مضبوط")
     if not EXAM_TOPIC_ID: config_warnings.append("EXAM_TOPIC_ID غير مضبوط؛ الأسئلة ستنزل في الصفحة العامة")
     if not WARNINGS_TOPIC_ID: config_warnings.append("WARNINGS_TOPIC_ID غير مضبوط")
     if not CHAMPIONS_TOPIC_ID: config_warnings.append("CHAMPIONS_TOPIC_ID غير مضبوط")
     if OWNER_CHAT_ID:
-        status=f"✅ اشتغل بوت الكيمياء بنجاح — {BUILD_VERSION}\n✅ قاعدة البيانات جاهزة\n✅ نظام استرداد الإنذارات فعال"
+        status=f"✅ اشتغل بوت اللغة العربية بنجاح — {BUILD_VERSION}\n✅ قاعدة البيانات جاهزة\n✅ نظام استرداد الإنذارات فعال"
         if config_warnings: status+="\n\n⚠️ تنبيهات الإعداد:\n"+"\n".join(f"• {x}" for x in config_warnings)
         try: await app.bot.send_message(OWNER_CHAT_ID,bold(status),parse_mode=ParseMode.HTML)
         except TelegramError: pass
@@ -2720,7 +2721,7 @@ async def error_handler(update,context):
         if now-_OWNER_ERROR_ALERT_AT<60:
             return
         _OWNER_ERROR_ALERT_AT=now
-        try: await context.bot.send_message(OWNER_CHAT_ID,bold(f"🚨 خطأ في بوت الكيمياء:\n{str(context.error)[:2000]}"),parse_mode=ParseMode.HTML)
+        try: await context.bot.send_message(OWNER_CHAT_ID,bold(f"🚨 خطأ في بوت اللغة العربية:\n{str(context.error)[:2000]}"),parse_mode=ParseMode.HTML)
         except TelegramError: pass
 
 
@@ -2767,7 +2768,7 @@ def acquire_single_instance_lock():
     if not DATABASE_URL or not USE_DATABASE_INSTANCE_LOCK:
         logger.info("Database advisory lock disabled; Render single-instance mode is expected.")
         return True
-    _INSTANCE_LOCK_CONN=psycopg.connect(DATABASE_URL,sslmode="require",connect_timeout=10,application_name="chemistry-bot-instance-lock")
+    _INSTANCE_LOCK_CONN=psycopg.connect(DATABASE_URL,sslmode="require",connect_timeout=10,application_name="arabic-bot-instance-lock")
     cur=_INSTANCE_LOCK_CONN.cursor()
     lock_id=int.from_bytes(hashlib.sha256(BOT_TOKEN.encode("utf-8")).digest()[:8],"big",signed=True)
     cur.execute("SELECT pg_try_advisory_lock(%s);",(lock_id,))
@@ -2805,6 +2806,8 @@ def main():
     acquire_single_instance_lock()
     threading.Thread(target=health_server,daemon=True).start()
     app=Application.builder().token(BOT_TOKEN).rate_limiter(AIORateLimiter()).post_init(post_init).post_shutdown(post_shutdown).build()
+    app.add_handler(CommandHandler("hwname",hwname_command),group=-3)
+    app.add_handler(MessageHandler(filters.ALL,ignore_senderless_message),group=-10)
     registration=ConversationHandler(
         entry_points=[CommandHandler("start",start), CallbackQueryHandler(role_choice_entry,pattern=r"^start_role\|(student|parent)$"), CallbackQueryHandler(parent_restart_registration,pattern="^parent_restart$"), CallbackQueryHandler(v47_reset_confirm,pattern="^v47_reset_confirm$")],
         states={REG_NAME:[MessageHandler(filters.TEXT & ~filters.COMMAND,reg_name)],REG_SCHOOL:[MessageHandler(filters.TEXT & ~filters.COMMAND,reg_school)],REG_GRADE:[MessageHandler(filters.TEXT & ~filters.COMMAND,reg_grade)],REG_JOIN:[CallbackQueryHandler(verify_join,pattern="^verify_join$")]},
@@ -2814,8 +2817,7 @@ def main():
     app.add_handler(CallbackQueryHandler(spam_guard),group=-1)
     app.add_handler(ChatMemberHandler(track_chat_member,ChatMemberHandler.CHAT_MEMBER),group=-2)
     app.add_handler(MessageHandler(filters.ChatType.GROUPS,observe_group_activity),group=-2)
-    app.add_handler(MessageHandler(filters.ALL,admin_access_guard),group=-3)
-    app.add_handler(CallbackQueryHandler(admin_access_guard),group=-3)
+    app.add_handler(MessageHandler(~filters.COMMAND & (filters.TEXT|filters.PHOTO|filters.Document.ALL|filters.VIDEO),v11_input_dispatch),group=-4)
     app.add_handler(registration,group=0)
     app.add_handler(CommandHandler("menu",menu_command),group=0)
     app.add_handler(CommandHandler("cancel",cancel_registration),group=0)
@@ -2830,6 +2832,8 @@ def main():
     app.add_handler(CommandHandler("prep_add",prep_add_command),group=0)
     app.add_handler(CommandHandler("set_cumulative",set_cumulative_command),group=0)
     app.add_handler(CommandHandler("id",id_command),group=0)
+    app.add_handler(CommandHandler("add_admin",add_admin_command),group=0)
+    app.add_handler(CommandHandler("remove_admin",remove_admin_command),group=0)
     app.add_handler(CommandHandler("deadline",deadline_command),group=0)
     app.add_handler(CommandHandler("prep_date",prep_date_command),group=0)
     app.add_handler(CommandHandler("chapter_end",chapter_end_command),group=0)
@@ -2850,6 +2854,7 @@ def main():
     app.add_handler(MessageHandler(filters.ChatType.GROUPS & ~filters.COMMAND & (filters.TEXT|filters.PHOTO|filters.Document.ALL|filters.VIDEO),receive_admin_communication),group=1)
     app.add_handler(MessageHandler(filters.ChatType.GROUPS & ~filters.COMMAND & (filters.TEXT|filters.PHOTO|filters.Document.ALL|filters.VIDEO),capture_group_task),group=3)
     app.add_handler(MessageHandler(filters.ChatType.PRIVATE & ~filters.COMMAND & (filters.TEXT|filters.PHOTO|filters.Document.ALL|filters.VIDEO),private_messages),group=2)
+    app.add_handler(CommandHandler("topics_check",submission_topics_check_command),group=0)
     app.add_error_handler(error_handler)
     app.run_polling(allowed_updates=Update.ALL_TYPES,drop_pending_updates=False)
 
@@ -2866,7 +2871,7 @@ async def show_today_preparation(query):
     text=preparation_text(row) if row else bold("📭 لا يوجد تحضير منشور حالياً.")
     kb=[]
     if row:
-        chapter=int(row.get("chapter") or (student.get("current_chapter") if student else 3) or 3)
+        chapter=int(row.get("chapter") or (student.get("current_chapter") if student else 2) or 2)
         for lecture in map(int,(row.get("lectures") or "").split(",")): kb.append([InlineKeyboardButton(f"▶️ الذهاب إلى المحاضرة {lecture}",callback_data=f"prepopen|{chapter}|{lecture}")])
     kb.append([back_menu()]); await query.edit_message_text(text,parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup(kb))
 
@@ -2951,11 +2956,11 @@ async def v28_admin_extend_exam_command(update,context):
 async def v28_exam_notice_command(update,context):
     if not is_admin(update.effective_user.id): return
     parts=[x.strip() for x in (update.message.text or "").partition(" ")[2].split("|")]
-    if len(parts)<4: await update.effective_message.reply_text(bold("الاستخدام:\n/exam_notice المسار | العنوان | DD/MM/YYYY HH:MM | نص التبليغ\nالمسار: course أو chapter_1 ... chapter_7"),parse_mode=ParseMode.HTML); return
+    if len(parts)<4: await update.effective_message.reply_text(bold("الاستخدام:\n/exam_notice المسار | العنوان | DD/MM/YYYY HH:MM | نص التبليغ\nالمسار: course أو chapter_1 ... chapter_9"),parse_mode=ParseMode.HTML); return
     scope,title,when,body=parts[:4]
     try: exam_at=datetime.strptime(when,"%d/%m/%Y %H:%M").replace(tzinfo=TIMEZONE)
     except ValueError: await update.effective_message.reply_text(bold("❌ صيغة التاريخ غير صحيحة."),parse_mode=ParseMode.HTML); return
-    valid={"course",*(f"chapter_{i}" for i in range(1,8))}
+    valid={"course",*(f"chapter_{i}" for i in range(1,6))}
     if scope not in valid: await update.effective_message.reply_text(bold("❌ المسار غير صحيح."),parse_mode=ParseMode.HTML); return
     row=await db.v28_create_exam_notice(title,body,scope,exam_at,update.effective_user.id)
     await update.effective_message.reply_text(bold(f"✅ تم حفظ تبليغ الامتحان.\n📌 {row['title']}\n📅 {exam_at.strftime('%d/%m/%Y %H:%M')}"),parse_mode=ParseMode.HTML)
@@ -2975,23 +2980,18 @@ async def button_handler(update: Update,context: ContextTypes.DEFAULT_TYPE):
         kind=data.split("|",1)[1]
         context.user_data["v29_publish"]={"kind":kind,"step":"scope"}
         if kind in {"exam","cumulative"}:
-            kb=InlineKeyboardMarkup([
-                [InlineKeyboardButton("👥 الدورة الحالية (طلاب الدورة)",callback_data="v29_scope|course")],
-                [InlineKeyboardButton("📘 الفصل 1",callback_data="v29_scope|chapter_1"),InlineKeyboardButton("📗 الفصل 2",callback_data="v29_scope|chapter_2")],
-                [InlineKeyboardButton("📙 الفصل 3",callback_data="v29_scope|chapter_3"),InlineKeyboardButton("📕 الفصل 4",callback_data="v29_scope|chapter_4")],
-                [InlineKeyboardButton("📒 الفصل 5",callback_data="v29_scope|chapter_5"),InlineKeyboardButton("📓 الفصل 6",callback_data="v29_scope|chapter_6")],
-                [InlineKeyboardButton("📔 الفصل 7",callback_data="v29_scope|chapter_7")],
-                [InlineKeyboardButton("❌ إلغاء",callback_data="v29_cancel")],
-            ])
+            scope_rows=[[InlineKeyboardButton("👥 الدورة الحالية (طلاب الدورة)",callback_data="v29_scope|course",style='success')]]
+            scope_rows += [[InlineKeyboardButton(f"📘 الباب {chapter}",callback_data=f"v29_scope|chapter_{chapter}",style='primary')
+                            for chapter in range(start,min(start+2,6))] for start in range(1,6,2)]
+            scope_rows.append([InlineKeyboardButton("❌ إلغاء",callback_data="v29_cancel",style='danger')])
+            kb=InlineKeyboardMarkup(scope_rows)
         else:
-            kb=InlineKeyboardMarkup([
-                [InlineKeyboardButton("👥 الدورة الحالية",callback_data="v29_scope|course")],
-                [InlineKeyboardButton("📘 الفصل 1",callback_data="v29_scope|chapter_1"),InlineKeyboardButton("📗 الفصل 2",callback_data="v29_scope|chapter_2")],
-                [InlineKeyboardButton("📙 الفصل 3",callback_data="v29_scope|chapter_3"),InlineKeyboardButton("📕 الفصل 4",callback_data="v29_scope|chapter_4")],
-                [InlineKeyboardButton("📔 الفصل 5",callback_data="v29_scope|chapter_5"),InlineKeyboardButton("📓 الفصل 6",callback_data="v29_scope|chapter_6")],
-                [InlineKeyboardButton("📒 الفصل 7",callback_data="v29_scope|chapter_7"),InlineKeyboardButton("📚 جميع المسارات",callback_data="v29_scope|all")],
-                [InlineKeyboardButton("❌ إلغاء",callback_data="v29_cancel")],
-            ])
+            scope_rows=[[InlineKeyboardButton("👥 الدورة الحالية",callback_data="v29_scope|course",style='success')]]
+            scope_rows += [[InlineKeyboardButton(f"📘 الباب {chapter}",callback_data=f"v29_scope|chapter_{chapter}",style='primary')
+                            for chapter in range(start,min(start+2,6))] for start in range(1,6,2)]
+            scope_rows += [[InlineKeyboardButton("📚 جميع المسارات",callback_data="v29_scope|all",style='primary')],
+                           [InlineKeyboardButton("❌ إلغاء",callback_data="v29_cancel",style='danger')]]
+            kb=InlineKeyboardMarkup(scope_rows)
         await query.answer(); await query.edit_message_text(bold("🎯 اختر المسار المستهدف:"),parse_mode=ParseMode.HTML,reply_markup=kb); return
     if data.startswith("v29_scope|"):
         if not is_admin(uid): await query.answer("للإدارة فقط.",show_alert=True); return
@@ -3012,7 +3012,7 @@ async def button_handler(update: Update,context: ContextTypes.DEFAULT_TYPE):
         chapter=int(scope.split("_")[1]); groups=CHAPTER_PREPARATION_DISTRIBUTION.get(chapter,[]); kb=[]
         for i,nums in enumerate(groups,1): kb.append([InlineKeyboardButton(f"تحضير {i} — م{'+م'.join(map(str,nums))}",callback_data=f"v29_prep|{chapter}|{i}")])
         kb.append([InlineKeyboardButton("❌ إلغاء",callback_data="v29_cancel")])
-        await query.answer(); await query.edit_message_text(bold(f"📘 الفصل {chapter}\n\nاختر التحضير المرتبط بالامتحان:"),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup(kb)); return
+        await query.answer(); await query.edit_message_text(bold(f"📘 الباب {chapter}\n\nاختر التحضير المرتبط بالامتحان:"),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup(kb)); return
     if data.startswith("v29_prep|"):
         if not is_admin(uid): await query.answer("للإدارة فقط.",show_alert=True); return
         st=context.user_data.get("v29_publish");
@@ -3032,30 +3032,30 @@ async def button_handler(update: Update,context: ContextTypes.DEFAULT_TYPE):
         exam_type="cumulative" if st["kind"]=="cumulative" else "normal"
         definition=await create_linked_exam_definition([(st["chapter"],st["prep_no"])],st["title"],uid,st["media"],"course" if st["scope"]=="course" else "chapter",None,exam_type,24)
         context.user_data.pop("v29_publish",None)
-        await query.answer("تم حفظ الامتحان",show_alert=True); await query.edit_message_text(bold("✅ تم نشر/تسجيل الامتحان بنجاح.\n\n📝 الدورة: يظهر تلقائياً الساعة 6 مساءً من اليوم التالي للتحضير.\n📘 الفصول: يظهر للطالب بعد إكمال التحضير، ثم يحتاج موافقة ولي الأمر أو الإدارة.\n⏱️ المدة: 24 ساعة."),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup([[back_menu()]])); return
+        await query.answer("تم حفظ الامتحان",show_alert=True); await query.edit_message_text(bold("✅ تم نشر/تسجيل الامتحان بنجاح.\n\n📝 الدورة: يظهر تلقائياً بعد 12 ساعة من نشر التحضير.\n📘 الأبواب: يظهر للطالب بعد إكمال التحضير، ثم يحتاج موافقة ولي الأمر أو الإدارة.\n⏱️ المدة: 24 ساعة."),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup([[back_menu()]])); return
     if data=="v29_cancel":
         context.user_data.pop("v29_publish",None); await query.answer("تم الإلغاء"); await query.edit_message_text(bold("❌ تم إلغاء النشر."),parse_mode=ParseMode.HTML,reply_markup=main_menu(is_admin(uid))); return
     if data=="exams_menu":
-        await query.answer(); await query.edit_message_text(bold("📝 قسم الامتحانات\n━━━━━━━━━━━━━━━━━━\nتظهر هنا الامتحانات المنشورة لمسارك فقط.\n\n• الدورة الحالية: الساعة 6 مساءً من اليوم التالي ليوم التحضير.\n• طلاب الفصول: بعد إكمال التحضير، ثم موافقة ولي الأمر أو الإدارة.\n• مدة كل امتحان تحددها الإدارة ويمكن تمديدها.\n• لا يوجد نظام منفصل باسم امتحانات اليوم."),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📝 الامتحانات",callback_data="tasks|exam|all")],[InlineKeyboardButton("🏆 الامتحانات التراكمية",callback_data="tasks|exam|cumulative")],[InlineKeyboardButton("🗂 الامتحانات السابقة",callback_data="past_exams")],[back_menu()]])); return
+        await query.answer(); await query.edit_message_text(bold("📝 قسم الامتحانات\n━━━━━━━━━━━━━━━━━━\nتظهر هنا الامتحانات المنشورة لمسارك فقط.\n\n• الدورة الحالية: بعد 12 ساعة من نشر التحضير.\n• طلاب الأبواب: بعد إكمال التحضير، ثم موافقة ولي الأمر أو الإدارة.\n• مدة كل امتحان تحددها الإدارة ويمكن تمديدها.\n• لا يوجد نظام منوحدة باسم امتحانات اليوم."),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📝 الامتحانات",callback_data="tasks|exam|all")],[InlineKeyboardButton("🏆 الامتحانات التراكمية",callback_data="tasks|exam|cumulative")],[InlineKeyboardButton("🗂 الامتحانات السابقة",callback_data="past_exams")],[back_menu()]])); return
     if data.startswith("tasks|exam|"): await show_tasks(query,"exam",data.split("|",2)[2]); return
     if data=="notifications":
         rows=await db.v28_unread_notifications(uid,20)
         if not rows: await query.answer("لا توجد إشعارات جديدة.",show_alert=True); return
         await db.v28_mark_notifications_read(uid,[r["id"] for r in rows]); await query.edit_message_text(bold("🔔 مركز الإشعارات\n━━━━━━━━━━━━━━━━━━\n"+"\n\n".join(f"• {r['title']}\n{r['body']}" for r in rows)),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup([[back_menu()]])); return
     if data=="academic_dashboard":
-        d=await db.v28_dashboard(uid); s=d["student"]; track="الدورة الحالية" if s.get("study_track")=="course" else f"الفصل {s.get('current_chapter') or '-'}"; avg=f"{d['average']:.1f}/100" if d["average"] is not None else "لا توجد درجات بعد"
+        d=await db.v28_dashboard(uid); s=d["student"]; track="الدورة الحالية" if s.get("study_track")=="course" else f"الباب {s.get('current_chapter') or '-'}"; avg=f"{d['average']:.1f}/100" if d["average"] is not None else "لا توجد درجات بعد"
         await query.edit_message_text(bold(f"📊 لوحتي الأكاديمية\n━━━━━━━━━━━━━━━━━━\n🎯 المسار: {track}\n🎬 المحاضرات المكتملة: {d['lectures']}\n📚 الواجبات المسلّمة: {d['homeworks']}\n📝 الامتحانات المصححة: {d['exams']}\n📈 معدل الامتحانات: {avg}\n🔥 السلسلة الحالية: {d['streak']} يوم\n🏆 أفضل سلسلة: {d['best_streak']} يوم"),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup([[back_menu()]])); return
     if data in {"personal_schedule","sched_save"} or data.startswith("schednum|") or data.startswith("schedday|"):
         student=await get_student(uid)
         if not student or student.get("study_track")!="chapter":
-            await query.answer("الجدول الشخصي متاح لطلاب الفصول والمسارات الشخصية.",show_alert=True); return
-        chapter=int(student.get("current_chapter") or 3)
+            await query.answer("الجدول الشخصي متاح لطلاب الأبواب والمسارات الشخصية.",show_alert=True); return
+        chapter=int(student.get("current_chapter") or 2)
         required=weekly_study_day_count(chapter)
         names=["الاثنين","الثلاثاء","الأربعاء","الخميس","الجمعة","السبت","الأحد"]
         if data=="personal_schedule":
             sched=await student_schedule(uid); days=set((sched or {}).get("study_days") or [])
             kb=[[InlineKeyboardButton(f"✏️ تعديل الأيام ({len(days)}/{required})",callback_data=f"schednum|{required}")],[InlineKeyboardButton("◀️ رجوع",callback_data="schedules_menu")]]
-            await query.edit_message_text(bold(f"🗓️ جدولك الدراسي\n\nالفصل {chapter}: يجب أن يكون لديك {required} أيام دراسة أسبوعياً.\nالأيام الحالية: {', '.join(names[i] for i in sorted(days)) or 'لم تحدد بعد'}\n\nيمكنك استبدال يوم بيوم آخر، مع بقاء العدد {required} دائماً. الحد الأقصى للتعديلات: 3."),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup(kb)); return
+            await query.edit_message_text(bold(f"🗓️ جدولك الدراسي\n\nالباب {chapter}: يجب أن يكون لديك {required} أيام دراسة أسبوعياً.\nالأيام الحالية: {', '.join(names[i] for i in sorted(days)) or 'لم تحدد بعد'}\n\nيمكنك استبدال يوم بيوم آخر، مع بقاء العدد {required} دائماً. الحد الأقصى للتعديلات: 3."),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup(kb)); return
         if data.startswith("schednum|"):
             context.user_data["schedule_required"]=required; context.user_data["schedule_days"]=set((await student_schedule(uid) or {}).get("study_days") or [])
             days=context.user_data["schedule_days"]; kb=[]
@@ -3180,8 +3180,8 @@ async def v30_show_chapter_catalog(query, chapter):
     uid=query.from_user.id
     rows=await db.v30_student_chapter_exam_catalog(uid, chapter)
     if not rows:
-        text=f"📘 الفصل {chapter}\n━━━━━━━━━━━━━━━━━━\n📭 لا توجد امتحانات منشورة لهذا الفصل حالياً."
-        await query.edit_message_text(bold(text),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("◀️ الفصول",callback_data="chapter_exam_menu")],[back_menu()]])); return
+        text=f"📘 الباب {chapter}\n━━━━━━━━━━━━━━━━━━\n📭 لا توجد امتحانات منشورة لهذا الباب حالياً."
+        await query.edit_message_text(bold(text),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("◀️ الأبواب",callback_data="chapter_exam_menu")],[back_menu()]])); return
     kb=[]
     current_chapter=int((await get_student(uid) or {}).get("current_chapter") or 0)
     for row in rows:
@@ -3200,13 +3200,13 @@ async def v30_show_chapter_catalog(query, chapter):
         elif status=="ready_waiting_task":
             kb.append([InlineKeyboardButton(f"⏳ {title} — جارٍ تجهيز الامتحان",callback_data="examlocked|processing|0")])
         elif status=="other_chapter":
-            kb.append([InlineKeyboardButton(f"🔒 {title} — هذا ليس فصلك الحالي",callback_data="examlocked|other_chapter|0")])
+            kb.append([InlineKeyboardButton(f"🔒 {title} — هذا ليس وحدةك الحالي",callback_data="examlocked|other_chapter|0")])
         else:
             done=row.get("completed_lectures",0); total=row.get("required_lectures",0)
             detail=f"أكمل التحضير ({done}/{total})" if total else "لم يكتمل المحتوى"
             kb.append([InlineKeyboardButton(f"🔒 {title} — {detail}",callback_data="examlocked|locked|0")])
-    kb.append([InlineKeyboardButton("◀️ الفصول",callback_data="chapter_exam_menu"),back_menu()])
-    await query.edit_message_text(bold(f"📘 امتحانات الفصل {chapter}\n━━━━━━━━━━━━━━━━━━\nتظهر جميع الامتحانات المنشورة للفصل.\n🟢 الامتحان الأخضر فقط هو القابل للفتح الآن.\n🔐 الامتحان الذي يحتاج موافقة يبقى مغلقاً حتى تصدر الموافقة."),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup(kb))
+    kb.append([InlineKeyboardButton("◀️ الأبواب",callback_data="chapter_exam_menu"),back_menu()])
+    await query.edit_message_text(bold(f"📘 امتحانات الباب {chapter}\n━━━━━━━━━━━━━━━━━━\nتظهر جميع الامتحانات المنشورة للوحدة.\n🟢 الامتحان الأخضر فقط هو القابل للفتح الآن.\n🔐 الامتحان الذي يحتاج موافقة يبقى مغلقاً حتى تصدر الموافقة."),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup(kb))
 
 async def v30_exam_menu(query):
     uid=query.from_user.id
@@ -3221,10 +3221,10 @@ async def v30_exam_menu(query):
         ])
         await query.edit_message_text(bold("📝 الامتحانات — الدورة الحالية\n━━━━━━━━━━━━━━━━━━\nهذا القسم مخصص لطلاب الدورة الحالية.\n\n📝 الامتحانات الحالية تظهر في موعدها تلقائياً.\n🗂 الامتحانات السابقة تُحفظ تلقائياً، ولا تحتاج الإدارة إلى إضافتها مرة ثانية."),parse_mode=ParseMode.HTML,reply_markup=kb)
     else:
-        chapter_names=["الأول","الثاني","الثالث","الرابع","الخامس","السادس","السابع"]
-        kb=InlineKeyboardMarkup([[InlineKeyboardButton(f"📘 الفصل {name}",callback_data=f"chapter_exam|{index}")]
+        chapter_names=["الأولى","الثانية","الثالثة","الرابعة","الخامسة"]
+        kb=InlineKeyboardMarkup([[InlineKeyboardButton(f"📘 الباب {name}",callback_data=f"chapter_exam|{index}")]
                                  for index,name in enumerate(chapter_names,1)]+[[back_menu()]])
-        await query.edit_message_text(bold("📝 الامتحانات\n━━━━━━━━━━━━━━━━━━\nاختر الفصل لعرض جميع امتحاناته.\n\n🔒 الامتحانات غير المستحقة تبقى مغلقة.\n🔐 عند إكمال المحتوى يصبح الامتحان بانتظار موافقة ولي الأمر أو الإدارة.\n🟢 بعد الموافقة فقط يمكن فتح الامتحان."),parse_mode=ParseMode.HTML,reply_markup=kb)
+        await query.edit_message_text(bold("📝 الامتحانات\n━━━━━━━━━━━━━━━━━━\nاختر الباب لعرض جميع امتحاناته.\n\n🔒 الامتحانات غير المستحقة تبقى مغلقة.\n🔐 عند إكمال المحتوى يصبح الامتحان بانتظار موافقة ولي الأمر أو الإدارة.\n🟢 بعد الموافقة فقط يمكن فتح الامتحان."),parse_mode=ParseMode.HTML,reply_markup=kb)
 
 _old_button_handler_v30=button_handler
 async def button_handler(update,context):
@@ -3241,7 +3241,7 @@ async def button_handler(update,context):
         await query.answer(); await v30_show_chapter_catalog(query,int(data.split("|")[1])); return
     if data.startswith("examlocked|"):
         reason=data.split("|")[1]
-        messages={"pending":"⏳ هذا الامتحان جاهز، لكنه بانتظار موافقة ولي الأمر أو الإدارة.","submitted":"✅ هذا الامتحان تم تسليمه مسبقاً.","closed":"⏰ انتهت مدة هذا الامتحان.","processing":"⏳ تم إكمال المحتوى، والبوت يجهز الامتحان الآن. أعد فتح القسم بعد لحظات.","locked":"🔒 لا يمكنك فتح هذا الامتحان بعد. أكمل المحتوى المطلوب أولاً.","other_chapter":"🔒 هذا الامتحان مخصص لفصل آخر وليس لمسارك الحالي."}
+        messages={"pending":"⏳ هذا الامتحان جاهز، لكنه بانتظار موافقة ولي الأمر أو الإدارة.","submitted":"✅ هذا الامتحان تم تسليمه مسبقاً.","closed":"⏰ انتهت مدة هذا الامتحان.","processing":"⏳ تم إكمال المحتوى، والبوت يجهز الامتحان الآن. أعد فتح القسم بعد لحظات.","locked":"🔒 لا يمكنك فتح هذا الامتحان بعد. أكمل المحتوى المطلوب أولاً.","other_chapter":"🔒 هذا الامتحان مخصص لوحدة آخر وليس لمسارك الحالي."}
         await query.answer(messages.get(reason,"🔒 هذا الامتحان غير متاح حالياً."),show_alert=True); return
     if data.startswith("examopen|"):
         task_id=int(data.split("|")[1]); task=await db.v30_exam_task_for_student(uid,task_id)
@@ -3252,7 +3252,7 @@ async def button_handler(update,context):
         if task.get("target_scope")=="chapter":
             student=await get_student(uid)
             if not student or int(student.get("current_chapter") or 0)!=int(task.get("chapter") or 0):
-                await query.answer("🔒 هذا الامتحان مخصص لفصل آخر وليس لمسارك الحالي.",show_alert=True); return
+                await query.answer("🔒 هذا الامتحان مخصص لوحدة آخر وليس لمسارك الحالي.",show_alert=True); return
         if task.get("closed") or (task.get("deadline") and task["deadline"]<=datetime.now(TIMEZONE)):
             await query.answer("⏰ انتهت مدة الامتحان.",show_alert=True); return
         await show_task(query,context,task_id); return
@@ -3279,7 +3279,7 @@ async def v31_admin_exam_catalog(query):
         await query.edit_message_text(bold("🗑 إدارة الامتحانات\n━━━━━━━━━━━━━━━━━━\n📭 لا توجد امتحانات منشورة حالياً."),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup([[back_menu()]])); return
     kb=[]
     for d in rows[:80]:
-        scope="الدورة الحالية" if d.get("target_scope")=="course" else f"الفصل {d.get('chapter') or '-'}"
+        scope="الدورة الحالية" if d.get("target_scope")=="course" else f"الباب {d.get('chapter') or '-'}"
         typ="تراكمي" if d.get("exam_type")=="cumulative" else "امتحان"
         title=str(d.get("title") or "").replace("[تراكمي] ","").replace("[تراكمي]","")
         kb.append([InlineKeyboardButton(f"📝 {title} — {scope} ({typ})",callback_data=f"adminexamdelete|{d['id']}")])
@@ -3337,7 +3337,7 @@ async def button_handler(update,context):
         if task.get("target_scope")=="chapter":
             student=await get_student(uid)
             if not student or int(student.get("current_chapter") or 0)!=int(task.get("chapter") or 0):
-                await query.answer("🔒 هذا الامتحان مخصص لفصل آخر وليس لمسارك الحالي.",show_alert=True); return
+                await query.answer("🔒 هذا الامتحان مخصص لوحدة آخر وليس لمسارك الحالي.",show_alert=True); return
         effective=await effective_task_deadline(task_id,uid)
         if not effective or not effective.get("assigned") or (effective.get("deadline") and effective["deadline"]<=datetime.now(TIMEZONE) and not effective.get("submitted")):
             await query.answer("⏰ انتهت مدة الامتحان. إذا كان لديك تمديد معتمد فافتح قسم الامتحانات من جديد.",show_alert=True); return
@@ -3397,7 +3397,7 @@ async def v32_admin_exam_tasks(query):
         await query.edit_message_text(bold("⏳ تمديد امتحان لطالب\n━━━━━━━━━━━━━━━━━━\n📭 لا توجد امتحانات مرتبطة حالياً."),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup([[back_menu()]])); return
     kb=[]
     for row in rows[:80]:
-        scope="الدورة الحالية" if row.get("target_scope")=="course" else f"الفصل {row.get('chapter') or '-'}"
+        scope="الدورة الحالية" if row.get("target_scope")=="course" else f"الباب {row.get('chapter') or '-'}"
         state="🔒 مغلق" if row.get("closed") else "🟢 مفتوح"
         kb.append([InlineKeyboardButton(f"📝 {row['title'].replace('[تراكمي] ','')} — {scope} | {state} | 👥 {row.get('student_count',0)}",callback_data=f"adminexamtask|{row['id']}")])
     kb.append([back_menu()])
@@ -3513,7 +3513,7 @@ async def v37_track_change_admin_menu(query):
         await query.edit_message_text(bold("🔄 طلبات تغيير مسار الدراسة\n━━━━━━━━━━━━━━━━━━\n📭 لا توجد طلبات معلقة."),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup([[back_menu()]])); return
     kb=[]
     for r in rows[:80]:
-        target="الدورة الحالية" if r["requested_track"]=="course" else f"الفصل {r['requested_chapter']}"
+        target="الدورة الحالية" if r["requested_track"]=="course" else f"الباب {r['requested_chapter']}"
         kb.append([InlineKeyboardButton(f"👤 {r['full_name']} ← {target}",callback_data=f"trackreq|{r['id']}")])
     kb.append([back_menu()])
     await query.edit_message_text(bold("🔄 طلبات تغيير مسار الدراسة\n━━━━━━━━━━━━━━━━━━\nاختر الطلب للمراجعة:"),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup(kb))
@@ -3525,7 +3525,7 @@ async def v37_track_request_review(query, request_id):
     req=next((r for r in rows if int(r["id"])==request_id),None)
     if not req:
         await query.answer("الطلب غير موجود أو تمت معالجته.",show_alert=True); return
-    target="الدورة الحالية" if req["requested_track"]=="course" else f"الفصل {req['requested_chapter']}"
+    target="الدورة الحالية" if req["requested_track"]=="course" else f"الباب {req['requested_chapter']}"
     kb=InlineKeyboardMarkup([
         [InlineKeyboardButton("✅ موافقة",callback_data=f"trackdecision|{request_id}|1"),InlineKeyboardButton("❌ رفض",callback_data=f"trackdecision|{request_id}|0")],
         [InlineKeyboardButton("◀️ الطلبات",callback_data="track_change_requests"),back_menu()]])
@@ -3537,15 +3537,15 @@ async def v37_apply_track_choice(query, context, choice):
     if not student:
         await query.answer("سجّل حسابك أولاً.",show_alert=True); return
     if choice=="course":
-        result=await db.v37_request_track_change(uid,"course",3,datetime.now(TIMEZONE).date(),[])
+        result=await db.v37_request_track_change(uid,"course",2,datetime.now(TIMEZONE).date(),[])
         target="الدورة الحالية"
     else:
         chapter=int(choice)
-        if chapter not in range(1,8):
-            await query.answer("الفصل غير صحيح.",show_alert=True); return
+        if chapter not in range(1,6):
+            await query.answer("الباب غير صحيح.",show_alert=True); return
         plan=build_personal_plan(chapter,datetime.now(TIMEZONE).date())
         result=await db.v37_request_track_change(uid,"chapter",chapter,datetime.now(TIMEZONE).date(),plan)
-        target=f"الفصل {chapter}"
+        target=f"الباب {chapter}"
     if result["status"]=="pending":
         await query.answer("تم إرسال الطلب للإدارة.",show_alert=True)
         for admin_id in (set(ADMIN_IDS)|set(FOUNDER_IDS)|({OWNER_CHAT_ID} if OWNER_CHAT_ID else set())):
@@ -3558,9 +3558,9 @@ async def v37_apply_track_choice(query, context, choice):
         await query.answer("تعذر تغيير المسار.",show_alert=True); return
     await query.answer("تم تغيير المسار بنجاح.",show_alert=True)
     await v37_notify_student(context,uid,"track_change","تحديث مسار الدراسة",f"تم تغيير مسارك إلى {target} وإعادة بناء جدولك الدراسي من تاريخ اليوم.","high",f"track_change:{uid}:{result['count']}")
-    reset_text=("🔁 بدأ الفصل من المحاضرة 1، واعيدت محاضراته وامتحاناته من البداية.\n⭐ رصيد XP السابق بقي محفوظا."
+    reset_text=("🔁 بدأ الباب من المحاضرة 1، واعيدت محاضراته وامتحاناته من البداية.\n⭐ رصيد XP السابق بقي محفوظا."
                 if choice!="course" else "📅 تم ربط حسابك بجدول الدورة الرسمي، ولا يمكن تعديله من الطالب.")
-    await query.edit_message_text(bold(f"✅ تم تغيير مسار الدراسة إلى {target}.\n\n🔄 التغييرات التلقائية المستخدمة: {result['count']}/3\n{reset_text}"),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📅 خطة إكمال الفصول",callback_data="chapter_completion_schedule")],[back_menu()]]))
+    await query.edit_message_text(bold(f"✅ تم تغيير مسار الدراسة إلى {target}.\n\n🔄 التغييرات التلقائية المستخدمة: {result['count']}/3\n{reset_text}"),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📅 خطة إكمال الأبواب",callback_data="chapter_completion_schedule")],[back_menu()]]))
 
 async def v37_schedule_menu(query):
     sched=await db.student_schedule(query.from_user.id)
@@ -3613,16 +3613,16 @@ async def v37_schedule_save(query,context):
 
 async def v37_completion_menu(query):
     plan=await db.v37_chapter_completion_plan(query.from_user.id)
-    lines=["📅 خطة إكمال الفصول",DIV]
+    lines=["📅 خطة إكمال الأبواب",DIV]
     for r in plan["chapters"]:
         finish=r["finish_date"]
         date_text=finish.strftime("%d/%m/%Y") if finish else "-"
-        lines.append(f"📘 الفصل {r['chapter']} — {r['prep_count']} تحضير — 🏁 {date_text}")
+        lines.append(f"📘 الباب {r['chapter']} — {r['prep_count']} تحضير — 🏁 {date_text}")
     full=plan["full_finish"].strftime("%d/%m/%Y") if plan["full_finish"] else "غير متاح"
     lines += [DIV,f"🏆 إكمال المنهج كاملًا: {full}"]
     kb=[]
     for r in plan["chapters"]:
-        kb.append([InlineKeyboardButton(f"📘 تفاصيل الفصل {r['chapter']}",callback_data=f"v37_chapter_finish|{r['chapter']}")])
+        kb.append([InlineKeyboardButton(f"📘 تفاصيل الباب {r['chapter']}",callback_data=f"v37_chapter_finish|{r['chapter']}")])
     kb += [[InlineKeyboardButton("🔄 تحديث الخطة",callback_data="v37_completion")],[back_menu()]]
     await query.edit_message_text(bold("\n".join(lines)),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup(kb))
 
@@ -3630,10 +3630,10 @@ async def v37_chapter_finish(query,chapter):
     plan=await db.v37_chapter_completion_plan(query.from_user.id)
     row=next((r for r in plan["chapters"] if int(r["chapter"])==chapter),None)
     if not row:
-        await query.answer("لا توجد بيانات لهذا الفصل.",show_alert=True); return
+        await query.answer("لا توجد بيانات لهذا الباب.",show_alert=True); return
     finish=row["finish_date"].strftime("%d/%m/%Y") if row["finish_date"] else "-"
-    await query.edit_message_text(bold(f"📘 خطة إكمال الفصل {chapter}\n{DIV}\n📚 عدد التحاضير: {row['prep_count']}\n🏁 موعد إكمال الفصل: {finish}\n\nيتحدث الموعد تلقائياً عند تغيير أيام الجدول أو تغيير مسار الدراسة أو الموافقة على إجازة."),parse_mode=ParseMode.HTML,
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📅 خطة كل الفصول",callback_data="v37_completion")],[back_menu()]]))
+    await query.edit_message_text(bold(f"📘 خطة إكمال الباب {chapter}\n{DIV}\n📚 عدد التحاضير: {row['prep_count']}\n🏁 موعد إكمال الباب: {finish}\n\nيتحدث الموعد تلقائياً عند تغيير أيام الجدول أو تغيير مسار الدراسة أو الموافقة على إجازة."),parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📅 خطة كل الأبواب",callback_data="v37_completion")],[back_menu()]]))
 
 
 async def v39_calendar_menu(query,period="week"):
@@ -3646,14 +3646,14 @@ async def v39_calendar_menu(query,period="week"):
         end=start+timedelta(days=6); title="🗓 جدولك الدراسي لهذا الأسبوع"
     calendar=await db.v39_student_calendar(query.from_user.id,start,end)
     student=calendar.get("student") or {}; names=["الاثنين","الثلاثاء","الأربعاء","الخميس","الجمعة","السبت","الأحد"]
-    lines=[title,DIV,f"📚 المسار: {'الدورة الحالية' if student.get('study_track')=='course' else 'الفصل '+str(student.get('current_chapter') or '-')}",""]
+    lines=[title,DIV,f"📚 المسار: {'الدورة الحالية' if student.get('study_track')=='course' else 'الباب '+str(student.get('current_chapter') or '-')}",""]
     by_date={}
     for prep in calendar.get("preparations",[]): by_date.setdefault(prep["target_date"],[]).append(prep)
     cursor=start
     while cursor<=end:
         if cursor in by_date:
             lines.append(f"📅 {names[cursor.weekday()]} {cursor:%d/%m}")
-            for prep in by_date[cursor]: lines.append(f"  • تحضير {prep.get('prep_no') or '-'} — الفصل {prep['chapter']} — محاضرات {prep['lectures']}")
+            for prep in by_date[cursor]: lines.append(f"  • تحضير {prep.get('prep_no') or '-'} — الباب {prep['chapter']} — محاضرات {prep['lectures']}")
         cursor+=timedelta(days=1)
     if len(lines)==4: lines.append("لا توجد تحاضير مجدولة ضمن هذه الفترة.")
     kb=[[InlineKeyboardButton("🗓 هذا الأسبوع",callback_data="student_calendar|week"),InlineKeyboardButton("📆 هذا الشهر",callback_data="student_calendar|month")],
@@ -3675,8 +3675,8 @@ async def v39_daily_session(query):
         if not prep and not personal: prep=await latest_preparation()
         if prep:
             nums=[int(x) for x in str(prep.get("lectures") or "").split(",") if x.strip().isdigit()]
-            text=f"🎯 جلسة اليوم\n{DIV}\n📘 الفصل {prep.get('chapter') or student.get('current_chapter') or 3}\n🎬 المحاضرات: {', '.join(map(str,nums))}\n\nابدأ بمحاضرة واحدة، ثم اختبر نفسك من بنك الأسئلة."
-            chapter=int(prep.get("chapter") or student.get("current_chapter") or 3)
+            text=f"🎯 جلسة اليوم\n{DIV}\n📘 الباب {prep.get('chapter') or student.get('current_chapter') or 2}\n🎬 المحاضرات: {', '.join(map(str,nums))}\n\nابدأ بمحاضرة واحدة، ثم اختبر نفسك من بنك الأسئلة."
+            chapter=int(prep.get("chapter") or student.get("current_chapter") or 2)
             kb=[[InlineKeyboardButton(f"▶️ ابدأ المحاضرة {n}",callback_data=f"prepopen|{chapter}|{n}")] for n in nums[:6]]
             kb += [[InlineKeyboardButton("🧠 اختبار مراجعة ذكي",callback_data="study_quiz")],[back_menu()]]
         else:
@@ -3687,10 +3687,10 @@ async def v39_daily_session(query):
 
 async def v39_mastery_menu(query):
     stats=await db.v39_learning_mastery(query.from_user.id); lines=["🧭 خريطة إتقان المنهج",DIV]
-    for chapter in range(1,8):
+    for chapter in range(1,6):
         done=int(stats["lectures"].get(chapter,0)); total=len(PLAYLISTS.get(chapter,[])); pct=round(done*100/total) if total else 0
         grade=stats["grades"].get(chapter); grade_text=f" | معدل الامتحان {grade:.1f}" if grade is not None else ""
-        lines.append(f"الفصل {chapter}: {done}/{total} محاضرة — {pct}%{grade_text}")
+        lines.append(f"الباب {chapter}: {done}/{total} محاضرة — {pct}%{grade_text}")
     await query.edit_message_text(bold("\n".join(lines)),parse_mode=ParseMode.HTML,
         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("👑 المراجعة الملكية",callback_data="royal_review_menu"),InlineKeyboardButton("🎯 نقاط ضعفي",callback_data="weaknesses_menu")],[back_menu()]]))
 
@@ -3699,20 +3699,20 @@ async def v39_quiz_question(query):
     student=await get_student(query.from_user.id); chapter=int((student or {}).get("current_chapter") or 1)
     question=await db.v39_adaptive_question(query.from_user.id,chapter)
     if not question:
-        await query.edit_message_text(bold(f"🧠 المراجعة الذكية\n{DIV}\nلا توجد أسئلة مضافة للفصل {chapter} بعد. يمكن للإدارة إضافتها بأمر /add_question."),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup([[back_menu()]])); return
-    text=f"🧠 سؤال مراجعة — الفصل {question['chapter']}\n{DIV}\n{question['question']}\n\nفكّر في الإجابة أولاً، ثم اكشف الحل."
+        await query.edit_message_text(bold(f"🧠 المراجعة الذكية\n{DIV}\nلا توجد أسئلة مضافة للوحدة {chapter} بعد. يمكن للإدارة إضافتها بأمر /add_question."),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup([[back_menu()]])); return
+    text=f"🧠 سؤال مراجعة — الباب {question['chapter']}\n{DIV}\n{question['question']}\n\nفكّر في الإجابة أولاً، ثم اكشف الحل."
     await query.edit_message_text(bold(text),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("👁 إظهار الحل",callback_data=f"study_answer|{question['id']}")],[back_menu()]]))
 
 
 async def v39_add_question_command(update,context):
     if not is_admin(update.effective_user.id): return
     parts=[p.strip() for p in (update.message.text or "").partition(" ")[2].split("|")]
-    if len(parts)<3 or not parts[0].isdigit() or int(parts[0]) not in range(1,8):
-        await update.effective_message.reply_text(bold("الاستخدام:\n/add_question الفصل | السؤال | الإجابة | الصعوبة"),parse_mode=ParseMode.HTML); return
+    if len(parts)<3 or not parts[0].isdigit() or int(parts[0]) not in range(1,6):
+        await update.effective_message.reply_text(bold("الاستخدام:\n/add_question الباب | السؤال | الإجابة | الصعوبة"),parse_mode=ParseMode.HTML); return
     difficulty=parts[3].lower() if len(parts)>3 else "medium"
     if difficulty not in {"easy","medium","hard"}: difficulty="medium"
     row=await db.v37_add_question(int(parts[0]),parts[1][:2000],parts[2][:2000],difficulty,"manual")
-    await update.effective_message.reply_text(bold(f"✅ أضيف السؤال رقم {row['id']} إلى الفصل {row['chapter']}."),parse_mode=ParseMode.HTML)
+    await update.effective_message.reply_text(bold(f"✅ أضيف السؤال رقم {row['id']} إلى الباب {row['chapter']}."),parse_mode=ParseMode.HTML)
 
 # Keep the existing handler chain intact, but give the v37 callbacks authoritative routing.
 _v37_previous_button_handler=button_handler
@@ -3786,7 +3786,7 @@ async def button_handler(update,context):
             f"⏰ المهام المتأخرة: {s.get('overdue',0)}\n"
             f"🚨 الإنذارات: {s.get('warnings',0)}"
         ),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("📅 خطة إكمال الفصول",callback_data="v37_completion")],
+            [InlineKeyboardButton("📅 خطة إكمال الأبواب",callback_data="v37_completion")],
             [InlineKeyboardButton("🔔 الإشعارات",callback_data="notifications")],
             [back_menu()]
         ])); return
@@ -3849,7 +3849,7 @@ async def button_handler(update,context):
         if not access.get("allowed"):
             row=access.get("row")
             if row:
-                await query.answer(f"🔒 التحضير الحالي هو رقم {row.get('prep_no') or '-'} في الفصل {row.get('chapter')}. أكمله أولاً.",show_alert=True)
+                await query.answer(f"🔒 التحضير الحالي هو رقم {row.get('prep_no') or '-'} في الباب {row.get('chapter')}. أكمله أولاً.",show_alert=True)
             else:
                 await query.answer("🎉 أكملت جميع التحاضير المتاحة لمسارك.",show_alert=True)
             return
@@ -3869,8 +3869,8 @@ async def button_handler(update,context):
                 await set_student_onboarding(uid,"course",3,start_date,[])
             else:
                 chapter=int(choice)
-                if chapter not in range(1,8):
-                    await query.answer("الفصل غير صحيح.",show_alert=True); return
+                if chapter not in range(1,6):
+                    await query.answer("الباب غير صحيح.",show_alert=True); return
                 await set_student_onboarding(uid,"chapter",chapter,start_date,build_personal_plan(chapter,start_date))
             await query.answer("تم حفظ مسارك الدراسي.",show_alert=True)
             updated=await get_student(uid)
@@ -3928,7 +3928,7 @@ async def post_init(app):
         BotCommand("unwarn","حذف إنذار - إدارة"),BotCommand("warnings","عرض الإنذارات - إدارة"),
         BotCommand("xp","تعديل XP - إدارة"),BotCommand("grade","درجة امتحان - إدارة"),BotCommand("id","عرض المعرفات")])
     if OWNER_CHAT_ID:
-        try: await app.bot.send_message(OWNER_CHAT_ID,bold(f"✅ اشتغل بوت الكيمياء — {BUILD_VERSION}\n✅ قاعدة Neon جاهزة\n✅ جميع مهام المتابعة مفعلة"),parse_mode=ParseMode.HTML)
+        try: await app.bot.send_message(OWNER_CHAT_ID,bold(f"✅ اشتغل بوت اللغة العربية — {BUILD_VERSION}\n✅ قاعدة Neon جاهزة\n✅ جميع مهام المتابعة مفعلة"),parse_mode=ParseMode.HTML)
         except TelegramError: pass
     app.job_queue.run_repeating(publish_preparations_job,60,first=5,name="preparations")
     app.job_queue.run_repeating(personal_preparations_job,60,first=8,name="personal_preparations")
@@ -3996,7 +3996,7 @@ async def v41_review_open(query,context,review_id):
     await query.answer()
     title=_v41_lecture_title(row["chapter"],row["lecture"])
     text=(f"<b>👑 {escape(REVIEW_STAGE_LABELS[int(row['stage'])])}\n{DIV}\n"
-          f"📘 الفصل {row['chapter']} | المحاضرة {row['lecture']}\n{escape(title)}\n\n"
+          f"📘 الباب {row['chapter']} | المحاضرة {row['lecture']}\n{escape(title)}\n\n"
           "راجع المحاضرة فعليا، وبعد الانتهاء انسخ وارسل القسم التالي برسالة:</b>\n\n"
           f"<code>{escape(ROYAL_REVIEW_OATH)}</code>")
     await query.edit_message_text(text,parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("◀️ المراجعات",callback_data="royal_review_menu"),back_menu()]]))
@@ -4007,7 +4007,7 @@ async def v41_review_reminders_job(context):
         try:
             await context.bot.send_message(row["user_id"],bold(
                 f"👑 حان موعد {REVIEW_STAGE_LABELS[int(row['stage'])]}\n"
-                f"📘 الفصل {row['chapter']} | المحاضرة {row['lecture']}\n\n"
+                f"📘 الباب {row['chapter']} | المحاضرة {row['lecture']}\n\n"
                 "افتح المراجعة الذكية وثبت المحاضرة بطريقة الحفظ الملكية."),parse_mode=ParseMode.HTML,
                 reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("👑 ابدا المراجعة",callback_data=f"royal_review|{row['id']}")]]))
             await db.v41_mark_review_reminded(row["id"])
@@ -4017,7 +4017,7 @@ async def v41_review_reminders_job(context):
 
 async def v41_weakness_menu(query):
     counts=await db.v41_weakness_counts(query.from_user.id); total=sum(counts.values())
-    kb=[[InlineKeyboardButton(f"📘 الفصل {chapter} | {counts.get(chapter,0)} نقطة",callback_data=f"weak_chapter|{chapter}")] for chapter in range(1,8)]
+    kb=[[InlineKeyboardButton(f"📘 الباب {chapter} | {counts.get(chapter,0)} نقطة",callback_data=f"weak_chapter|{chapter}")] for chapter in range(1,6)]
     kb.append([back_menu()])
     await query.edit_message_text(bold(f"🎯 نقاط ضعفي\n{DIV}\nسجل اي نقطة غير واضحة داخل محاضرتها، وبعد تمكنك منها اقسم القسم المخصص فتحذف من القائمة وتحصل على 5 XP.\n\n📌 النقاط المفتوحة حاليا: {total}"),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup(kb))
 
@@ -4028,8 +4028,8 @@ async def v41_weakness_chapter(query,chapter):
     kb=[]; lectures=PLAYLISTS.get(chapter,[])
     for index in range(0,len(lectures),2):
         kb.append([InlineKeyboardButton(f"م{number} ({counts[number]})",callback_data=f"weak_lecture|{chapter}|{number}") for number,_title,_url in lectures[index:index+2]])
-    kb += [[InlineKeyboardButton("◀️ الفصول",callback_data="weaknesses_menu"),back_menu()]]
-    await query.edit_message_text(bold(f"🎯 نقاط ضعف الفصل {chapter}\n{DIV}\nاختر المحاضرة حتى تضيف نقطة ضعف او تعالج النقاط المسجلة."),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup(kb))
+    kb += [[InlineKeyboardButton("◀️ الأبواب",callback_data="weaknesses_menu"),back_menu()]]
+    await query.edit_message_text(bold(f"🎯 نقاط ضعف الباب {chapter}\n{DIV}\nاختر المحاضرة حتى تضيف نقطة ضعف او تعالج النقاط المسجلة."),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup(kb))
 
 
 async def v41_weakness_lecture(query,chapter,lecture):
@@ -4038,9 +4038,9 @@ async def v41_weakness_lecture(query,chapter,lecture):
         label=" ".join(row["weakness_text"].split())
         kb.append([InlineKeyboardButton(f"🎯 {index}. {label[:35]}",callback_data=f"weak_open|{row['id']}")])
     kb += [[InlineKeyboardButton("➕ اضافة نقطة ضعف",callback_data=f"weak_add|{chapter}|{lecture}")],
-           [InlineKeyboardButton(f"◀️ الفصل {chapter}",callback_data=f"weak_chapter|{chapter}"),back_menu()]]
+           [InlineKeyboardButton(f"◀️ الباب {chapter}",callback_data=f"weak_chapter|{chapter}"),back_menu()]]
     status=f"عدد نقاط الضعف المفتوحة: {len(rows)}" if rows else "لا توجد نقاط ضعف مسجلة لهذه المحاضرة."
-    await query.edit_message_text(bold(f"📘 الفصل {chapter} | المحاضرة {lecture}\n{title}\n{DIV}\n{status}"),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup(kb))
+    await query.edit_message_text(bold(f"📘 الباب {chapter} | المحاضرة {lecture}\n{title}\n{DIV}\n{status}"),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup(kb))
 
 
 async def v41_weakness_open(query,context,weakness_id):
@@ -4049,7 +4049,7 @@ async def v41_weakness_open(query,context,weakness_id):
         await query.answer("نقطة الضعف غير موجودة او تم حلها.",show_alert=True); return
     context.user_data["v41_weakness_oath_id"]=int(weakness_id)
     await query.answer()
-    text=(f"<b>🎯 نقطة ضعفي\n{DIV}\n📘 الفصل {row['chapter']} | المحاضرة {row['lecture']}\n\n"
+    text=(f"<b>🎯 نقطة ضعفي\n{DIV}\n📘 الباب {row['chapter']} | المحاضرة {row['lecture']}\n\n"
           f"{escape(row['weakness_text'])}\n\nبعد ما تتمكن من حلها، انسخ وارسل القسم التالي برسالة لتحصل على 5 XP:</b>\n\n"
           f"<code>{escape(WEAKNESS_RESOLUTION_OATH)}</code>")
     await query.edit_message_text(text,parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("◀️ المحاضرة",callback_data=f"weak_lecture|{row['chapter']}|{row['lecture']}"),back_menu()]]))
@@ -4063,7 +4063,7 @@ async def v41_schedule_hub(query):
         [InlineKeyboardButton("🏁 متى ننهي المنهج؟",callback_data="chapter_completion_schedule")]]
     if student.get("study_track")=="chapter":
         kb.append([InlineKeyboardButton("⚙️ تغيير ايام الدراسة",callback_data="personal_schedule")])
-        note="يمكنك تغيير الايام فقط، اما عدد ايام الدراسة فهو ثابت حسب الفصل."
+        note="يمكنك اختيار من يوم إلى سبعة أيام دراسة أسبوعياً وتعديلها لاحقاً."
     else:
         note="طلاب الدورة الحالية يتبعون جدول الدورة الرسمي ولا يمكنهم تغييره."
     kb.append([back_menu()])
@@ -4080,13 +4080,13 @@ async def v41_calendar_menu(query,period="week"):
         start=today-timedelta(days=today.weekday()); end=start+timedelta(days=6); title="🗓 جدولي الدراسي لهذا الاسبوع"
     calendar=await db.v41_student_calendar(query.from_user.id,start,end)
     student=calendar.get("student") or {}; rows=calendar.get("preparations") or []
-    track="الدورة الحالية" if student.get("study_track")=="course" else f"الفصل {student.get('current_chapter') or '-'}"
+    track="الدورة الحالية" if student.get("study_track")=="course" else f"الباب {student.get('current_chapter') or '-'}"
     names=["الاثنين","الثلاثاء","الاربعاء","الخميس","الجمعة","السبت","الاحد"]
     lines=[title,DIV,f"📚 المسار: {track}",f"📅 الفترة: {start:%d/%m/%Y} - {end:%d/%m/%Y}",""]
     for row in rows:
         lectures=" + ".join(f"م{x.strip()}" for x in str(row.get("lectures") or "").split(",") if x.strip())
         today_mark=" ← اليوم" if row["target_date"]==today else ""
-        lines.append(f"• {names[row['target_date'].weekday()]} {row['target_date']:%d/%m}{today_mark}\n  الفصل {row['chapter']} | تحضير {row.get('prep_no') or '-'} | {lectures}")
+        lines.append(f"• {names[row['target_date'].weekday()]} {row['target_date']:%d/%m}{today_mark}\n  الباب {row['chapter']} | تحضير {row.get('prep_no') or '-'} | {lectures}")
     if not rows: lines.append("لا توجد تحاضير ضمن هذه الفترة في الجدول الفعلي.")
     kb=[[InlineKeyboardButton("🗓 الاسبوع",callback_data="student_calendar|week"),InlineKeyboardButton("📆 الشهر",callback_data="student_calendar|month")],
         [InlineKeyboardButton("🏁 متى ننهي المنهج؟",callback_data="chapter_completion_schedule")],
@@ -4096,11 +4096,11 @@ async def v41_calendar_menu(query,period="week"):
 
 async def v41_finish_menu(query):
     student=await get_student(query.from_user.id); plan=await db.v37_chapter_completion_plan(query.from_user.id)
-    track="الدورة الحالية" if student and student.get("study_track")=="course" else f"الفصل {student.get('current_chapter') or '-'}" if student else "-"
+    track="الدورة الحالية" if student and student.get("study_track")=="course" else f"الباب {student.get('current_chapter') or '-'}" if student else "-"
     lines=["🏁 متى ننهي المنهج؟",DIV,f"📚 المسار: {track}",""]
     for row in plan["chapters"]:
         finish=row["finish_date"].strftime("%d/%m/%Y") if row.get("finish_date") else "-"
-        lines.append(f"📘 الفصل {row['chapter']}: {finish} | {row['prep_count']} تحضير")
+        lines.append(f"📘 الباب {row['chapter']}: {finish} | {row['prep_count']} تحضير")
     full=plan["full_finish"].strftime("%d/%m/%Y") if plan.get("full_finish") else "غير متاح حاليا"
     lines += ["",DIV,f"🏆 موعد انهاء المنهج بالكامل: {full}","يتحدث الموعد تلقائيا من الجدول الحقيقي، وليس من نص ثابت."]
     await query.edit_message_text(bold("\n".join(lines)),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔄 تحديث",callback_data="chapter_completion_schedule")],[InlineKeyboardButton("◀️ الجداول",callback_data="schedules_menu"),back_menu()]]))
@@ -4108,47 +4108,60 @@ async def v41_finish_menu(query):
 
 async def v41_study_days_menu(query,context):
     student=await get_student(query.from_user.id)
-    if not student or student.get("study_track")!="chapter":
-        await query.edit_message_text(bold("🔒 طلاب الدورة الحالية يتبعون جدول الدورة الرسمي، لذلك لا يمكن تغيير ايامه من حساب الطالب."),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🗓 عرض الجدول",callback_data="schedules_menu"),back_menu()]])); return
-    chapter=int(student.get("current_chapter") or 1); required=weekly_study_day_count(chapter)
-    sched=await student_schedule(query.from_user.id); current=set((sched or {}).get("study_days") or [])
-    if len(current)!=required:
-        current=set({6,0,1,2,3} if chapter==1 else ({6,0,1,3} if chapter==2 else {6,1,3}))
-    context.user_data["v41_study_days"]=sorted(current); context.user_data["v41_study_required"]=required
-    names=["الاثنين","الثلاثاء","الاربعاء","الخميس","الجمعة","السبت","الاحد"]
-    kb=[[InlineKeyboardButton(("☑️ " if day in current else "☐ ")+names[day],callback_data=f"v41_study_day|{day}")] for day in range(7)]
-    kb += [[InlineKeyboardButton("💾 حفظ الايام",callback_data="v41_study_save")],[InlineKeyboardButton("◀️ الجداول",callback_data="schedules_menu"),back_menu()]]
-    await query.edit_message_text(bold(f"⚙️ ايام الدراسة\n{DIV}\nالفصل {chapter} يحتاج {required} ايام دراسة اسبوعيا.\n\nيمكنك استبدال الايام فقط، ولا يمكنك زيادة العدد او تقليله.\nالمحدد: {len(current)}/{required}"),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup(kb))
+    if not student or student.get('study_track')!='chapter':
+        await query.edit_message_text(bold('🔒 جدول الدورة الرسمية ثابت. تغيير أيام الدراسة متاح لمسار الفصول فقط.'),
+            parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('🗓 عرض الجدول',callback_data='schedules_menu'),back_menu()]]));return
+    chapter=int(student.get('current_chapter') or 1)
+    sched=await student_schedule(query.from_user.id)
+    current={int(day) for day in ((sched or {}).get('study_days') or []) if 0<=int(day)<=6}
+    if not current: current={0,2,4}
+    context.user_data['v41_study_days']=sorted(current)
+    context.user_data.pop('v41_study_required',None)
+    names=['الاثنين','الثلاثاء','الأربعاء','الخميس','الجمعة','السبت','الأحد']
+    kb=[[InlineKeyboardButton(('☑️ ' if day in current else '☐ ')+names[day],callback_data=f'v41_study_day|{day}')]
+        for day in range(7)]
+    kb += [[InlineKeyboardButton('💾 حفظ الأيام',callback_data='v41_study_save',style='success')],
+           [InlineKeyboardButton('◀️ الجداول',callback_data='schedules_menu'),back_menu()]]
+    await query.edit_message_text(bold(f'⚙️ أيام الدراسة\n{DIV}\nالمسار: الفصل {chapter}\n'
+        f'اختر من يوم واحد إلى 7 أيام أسبوعياً. سيتم إعادة ترتيب التحاضير غير المكتملة فقط.\n'
+        f'المحدد: {len(current)}/7'),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup(kb))
+
 
 
 async def v41_toggle_study_day(query,context,day):
-    days=set(context.user_data.get("v41_study_days",[])); required=int(context.user_data.get("v41_study_required",0))
-    if not required:
-        await query.answer("افتح تعديل ايام الدراسة من جديد.",show_alert=True); return
-    if day in days: days.remove(day)
-    elif len(days)<required: days.add(day)
-    else:
-        await query.answer(f"احذف يوما اولا ثم اختر البديل. العدد ثابت: {required}.",show_alert=True); return
-    context.user_data["v41_study_days"]=sorted(days)
-    names=["الاثنين","الثلاثاء","الاربعاء","الخميس","الجمعة","السبت","الاحد"]
-    kb=[[InlineKeyboardButton(("☑️ " if j in days else "☐ ")+names[j],callback_data=f"v41_study_day|{j}")] for j in range(7)]
-    kb += [[InlineKeyboardButton("💾 حفظ الايام",callback_data="v41_study_save")],[InlineKeyboardButton("◀️ الجداول",callback_data="schedules_menu"),back_menu()]]
+    if not 0<=int(day)<=6:
+        await query.answer('اليوم غير صالح.',show_alert=True);return
+    if 'v41_study_days' not in context.user_data:
+        await query.answer('افتح تعديل الأيام من جديد.',show_alert=True);return
+    days=set(context.user_data['v41_study_days'])
+    if day in days:days.remove(day)
+    else:days.add(day)
+    context.user_data['v41_study_days']=sorted(days)
+    names=['الاثنين','الثلاثاء','الأربعاء','الخميس','الجمعة','السبت','الأحد']
+    kb=[[InlineKeyboardButton(('☑️ ' if j in days else '☐ ')+names[j],callback_data=f'v41_study_day|{j}')]
+        for j in range(7)]
+    kb += [[InlineKeyboardButton(f'💾 حفظ الأيام ({len(days)}/7)',callback_data='v41_study_save',style='success')],
+           [InlineKeyboardButton('◀️ الجداول',callback_data='schedules_menu'),back_menu()]]
     await query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(kb))
 
 
+
 async def v41_save_study_days(query,context):
-    days=context.user_data.get("v41_study_days",[]); required=int(context.user_data.get("v41_study_required",0))
-    if not required or len(days)!=required:
-        await query.answer(f"يجب تحديد {required or '-'} ايام بالضبط.",show_alert=True); return
+    days=context.user_data.get('v41_study_days')
+    if days is None or not 1<=len(days)<=7 or any(not 0<=int(d)<=6 for d in days):
+        await query.answer('اختر من يوم واحد إلى سبعة أيام ثم احفظ.',show_alert=True);return
     result=await db.v41_set_study_days(query.from_user.id,days)
-    if result.get("status")=="course":
-        await query.answer("جدول طلاب الدورة ثابت.",show_alert=True); return
-    if result.get("status")!="ok":
-        await query.answer("تعذر حفظ الايام.",show_alert=True); return
-    context.user_data.pop("v41_study_days",None); context.user_data.pop("v41_study_required",None)
-    names=["الاثنين","الثلاثاء","الاربعاء","الخميس","الجمعة","السبت","الاحد"]
-    await query.answer("تم حفظ الايام واعادة ترتيب التحاضير.",show_alert=True)
-    await query.edit_message_text(bold(f"✅ تم تحديث ايام دراستك\n\n📅 {', '.join(names[d] for d in days)}\n📚 بقي العدد ثابتا: {required} ايام\n🔄 اعيد ترتيب {result['pending']} تحضير غير مكتمل فقط."),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🗓 عرض الجدول",callback_data="schedules_menu"),back_menu()]]))
+    if result.get('status')!='ok':
+        messages={'course':'جدول طلاب الدورة ثابت.','inactive':'حسابك غير مفعل.','count':'اختر من 1 إلى 7 أيام.','missing':'حسابك غير موجود.'}
+        await query.answer(messages.get(result.get('status'),'تعذر حفظ الأيام، حاول مجدداً.'),show_alert=True);return
+    context.user_data.pop('v41_study_days',None)
+    context.user_data.pop('v41_study_required',None)
+    names=['الاثنين','الثلاثاء','الأربعاء','الخميس','الجمعة','السبت','الأحد']
+    await query.answer('تم حفظ الأيام وإعادة ترتيب التحاضير.',show_alert=True)
+    await query.edit_message_text(bold(f"✅ تم تحديث أيام دراستك\n\n📅 {', '.join(names[d] for d in days)}\n"
+        f"📚 العدد: {len(days)} أيام أسبوعياً\n🔄 أُعيد ترتيب {result['pending']} تحضير غير مكتمل فقط."),
+        parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('🗓 عرض الجدول',callback_data='schedules_menu'),back_menu()]]))
+
 
 
 _v41_previous_button_handler=button_handler
@@ -4181,7 +4194,7 @@ async def button_handler(update,context):
         _,chapter,lecture=data.split("|"); await query.answer(); await v41_weakness_lecture(query,int(chapter),int(lecture)); return
     if data.startswith("weak_add|"):
         _,chapter,lecture=data.split("|"); context.user_data["v41_weakness_add"]={"chapter":int(chapter),"lecture":int(lecture)}
-        await query.answer(); await query.edit_message_text(bold(f"➕ اضافة نقطة ضعف\n{DIV}\n📘 الفصل {chapter} | المحاضرة {lecture}\n\nاكتب نقطة الضعف برسالة واحدة واضحة."),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("الغاء",callback_data=f"weak_lecture|{chapter}|{lecture}"),back_menu()]])); return
+        await query.answer(); await query.edit_message_text(bold(f"➕ اضافة نقطة ضعف\n{DIV}\n📘 الباب {chapter} | المحاضرة {lecture}\n\nاكتب نقطة الضعف برسالة واحدة واضحة."),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("الغاء",callback_data=f"weak_lecture|{chapter}|{lecture}"),back_menu()]])); return
     if data.startswith("weak_open|"):
         context.user_data.pop("v41_weakness_add",None); await v41_weakness_open(query,context,int(data.split("|")[1])); return
     if data=="schedules_menu":
@@ -4204,7 +4217,7 @@ async def button_handler(update,context):
             if choice=="course":
                 warning="سيتم تحويلك الى جدول الدورة الرسمي، ولن تستطيع تعديل ايامه."
             else:
-                warning=f"سيعاد الفصل {choice} من المحاضرة 1، ويحذف تقدم وامتحانات الفصل {choice} وما بعده حتى تؤديها من جديد. نقاط XP تبقى محفوظة."
+                warning=f"سيعاد الباب {choice} من المحاضرة 1، ويحذف تقدم وامتحانات الباب {choice} وما بعده حتى تؤديها من جديد. نقاط XP تبقى محفوظة."
             await query.answer(); await query.edit_message_text(bold(f"⚠️ تاكيد تغيير المسار\n{DIV}\n{warning}\n\nهل تريد المتابعة؟"),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ نعم، نفذ التغيير",callback_data=f"v41_track_confirm|{choice}")],[InlineKeyboardButton("❌ الغاء",callback_data="account_settings"),back_menu()]])); return
     if data.startswith("v41_track_confirm|"):
         await v37_apply_track_choice(query,context,data.split("|",1)[1]); return
@@ -4221,7 +4234,7 @@ async def private_messages(update,context):
         result=await db.v41_complete_review(update.effective_user.id,int(review_id))
         if result.get("status")=="ok":
             context.user_data.pop("v41_review_oath_id",None); row=result["review"]
-            await update.effective_message.reply_text(bold(f"✅ تم تسجيل المراجعة {row['stage']} للمحاضرة {row['lecture']} من الفصل {row['chapter']}.\nاستمر على المواعيد الاربعة حتى تثبت المادة باقوى صورة."),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("👑 المراجعة التالية",callback_data="royal_review_menu"),back_menu()]])); return
+            await update.effective_message.reply_text(bold(f"✅ تم تسجيل المراجعة {row['stage']} للمحاضرة {row['lecture']} من الباب {row['chapter']}.\nاستمر على المواعيد الاربعة حتى تثبت المادة باقوى صورة."),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("👑 المراجعة التالية",callback_data="royal_review_menu"),back_menu()]])); return
         await update.effective_message.reply_text(bold("تعذر تسجيل المراجعة او لم يحن موعدها بعد."),parse_mode=ParseMode.HTML); return
     weakness_id=context.user_data.get("v41_weakness_oath_id")
     if weakness_id:
@@ -4241,7 +4254,7 @@ async def private_messages(update,context):
         if not row:
             await update.effective_message.reply_text(bold("تعذر حفظ نقطة الضعف."),parse_mode=ParseMode.HTML); return
         context.user_data.pop("v41_weakness_add",None)
-        await update.effective_message.reply_text(bold(f"✅ تم حفظ نقطة الضعف داخل الفصل {row['chapter']} - المحاضرة {row['lecture']}."),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🎯 عرض نقاط المحاضرة",callback_data=f"weak_lecture|{row['chapter']}|{row['lecture']}")],[back_menu()]])); return
+        await update.effective_message.reply_text(bold(f"✅ تم حفظ نقطة الضعف داخل الباب {row['chapter']} - المحاضرة {row['lecture']}."),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🎯 عرض نقاط المحاضرة",callback_data=f"weak_lecture|{row['chapter']}|{row['lecture']}")],[back_menu()]])); return
     return await _v41_previous_private_messages(update,context)
 
 
@@ -4312,12 +4325,12 @@ async def v42_review_menu(query):
             kb.append([InlineKeyboardButton(f"{mark} تحضير {prep.get('chapter_prep_no') or prep['prep_no']} | ف{prep['chapter']} | {lectures}",callback_data=f"v42_review_prep|{prep['prep_no']}")])
         if not groups: lines.append("اكمل اول تحضير حتى يبني البوت مراجعاته بالترتيب.")
     else:
-        chapter=int(student.get("current_chapter") or 1); lines.append(f"📘 ترتيب الفصل {chapter} يبدا من اول محاضرة:")
+        chapter=int(student.get("current_chapter") or 1); lines.append(f"📘 ترتيب الباب {chapter} يبدا من اول محاضرة:")
         for row in due[:30]:
             kb.append([InlineKeyboardButton(f"🔥 م{row['lecture']} | المراجعة {row['stage']}",callback_data=f"royal_review|{row['id']}")])
         if pending and not due:
             first=pending[0]; lines.append(f"اقرب مراجعة: م{first['lecture']} في {first['due_at'].astimezone(TIMEZONE):%d/%m %H:%M}")
-        elif not pending: lines.append("اكمل المحاضرة الاولى في فصلك حتى يبدا نظام المراجعة.")
+        elif not pending: lines.append("اكمل المحاضرة الاولى في وحدةك حتى يبدا نظام المراجعة.")
     kb += [[InlineKeyboardButton("🧪 اختبار ذاتي ذكي",callback_data="adaptive_quiz")],[back_menu()]]
     await query.edit_message_text(bold("\n".join(lines)),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup(kb))
 
@@ -4327,7 +4340,7 @@ async def v42_review_prep(query,prep_no):
     if not prep:
         await query.answer("التحضير غير موجود.",show_alert=True); return
     lectures=_v42_prep_lectures(prep); items=[r for r in data.get("pending",[]) if int(r["chapter"])==int(prep["chapter"]) and int(r["lecture"]) in lectures]
-    kb=[]; lines=[f"👑 مراجعة تحضير {prep.get('chapter_prep_no') or prep['prep_no']}",DIV,f"📘 الفصل {prep['chapter']} | "+" + ".join(f"م{x}" for x in sorted(lectures)),""]
+    kb=[]; lines=[f"👑 مراجعة تحضير {prep.get('chapter_prep_no') or prep['prep_no']}",DIV,f"📘 الباب {prep['chapter']} | "+" + ".join(f"م{x}" for x in sorted(lectures)),""]
     for row in items:
         if row.get("due"): kb.append([InlineKeyboardButton(f"🔥 م{row['lecture']} | المراجعة {row['stage']}",callback_data=f"royal_review|{row['id']}")])
         else: lines.append(f"⏳ م{row['lecture']} | مراجعة {row['stage']} في {row['due_at'].astimezone(TIMEZONE):%d/%m %H:%M}")
@@ -4343,19 +4356,19 @@ async def v42_exam_menu(query):
     if student.get("study_track")=="course":
         kb=InlineKeyboardMarkup([
             [InlineKeyboardButton("🟢 امتحان اليوم",callback_data="course_current_exams")],
-            [InlineKeyboardButton("📚 بنك امتحانات الفصول",callback_data="v42_exam_bank")],
+            [InlineKeyboardButton("📚 بنك امتحانات الأبواب",callback_data="v42_exam_bank")],
             [InlineKeyboardButton("🏆 الامتحانات التراكمية",callback_data="tasks|exam|cumulative")],
             [InlineKeyboardButton("🗂 امتحاناتي السابقة",callback_data="course_past_exams")],[back_menu()]])
-        text="📝 امتحانات الدورة الحالية\n"+DIV+"\nامتحان اليوم يظهر تلقائيا بعد 12 ساعة من وقت نشر التحضير المرتبط به.\n\nبنك الفصول منفصل ولا يوقف تحاضير الدورة."
+        text="📝 امتحانات الدورة الحالية\n"+DIV+"\nامتحان الدورة يظهر بعد 12 ساعة من نشر التحضير ويستمر 24 ساعة.\n\nبنك الأبواب منوحدة ولا يوقف تحاضير الدورة."
     else:
-        kb=InlineKeyboardMarkup([[InlineKeyboardButton(f"📘 الفصل {n}",callback_data=f"chapter_exam|{n}")] for n in range(1,8)]+[[back_menu()]])
-        text="📝 امتحانات الفصول\n"+DIV+"\nاختر الفصل. امتحان فصلك الحالي يفتح بعد اكمال محتواه والموافقة عليه."
+        kb=InlineKeyboardMarkup([[InlineKeyboardButton(f"📘 الباب {n}",callback_data=f"chapter_exam|{n}")] for n in range(1,6)]+[[back_menu()]])
+        text="📝 امتحانات الأبواب\n"+DIV+"\nاختر الباب. امتحان وحدةك الحالي يفتح بعد اكمال محتواه والموافقة عليه."
     await query.edit_message_text(bold(text),parse_mode=ParseMode.HTML,reply_markup=kb)
 
 
 async def v42_exam_bank(query):
-    kb=InlineKeyboardMarkup([[InlineKeyboardButton(f"📘 الفصل {n}",callback_data=f"v42_bank_chapter|{n}")] for n in range(1,8)]+[[InlineKeyboardButton("◀️ الامتحانات",callback_data="exams_menu"),back_menu()]])
-    await query.edit_message_text(bold("📚 بنك امتحانات الفصول\n"+DIV+"\nامتحانات اضافية مرتبة حسب الفصول. لا تتداخل مع امتحان اليوم ولا تحجز التحضير التالي."),parse_mode=ParseMode.HTML,reply_markup=kb)
+    kb=InlineKeyboardMarkup([[InlineKeyboardButton(f"📘 الباب {n}",callback_data=f"v42_bank_chapter|{n}")] for n in range(1,6)]+[[InlineKeyboardButton("◀️ الامتحانات",callback_data="exams_menu"),back_menu()]])
+    await query.edit_message_text(bold("📚 بنك امتحانات الأبواب\n"+DIV+"\nامتحانات اضافية مرتبة حسب الأبواب. لا تتداخل مع امتحان اليوم ولا تحجز التحضير التالي."),parse_mode=ParseMode.HTML,reply_markup=kb)
 
 
 async def v42_bank_chapter(query,chapter):
@@ -4371,10 +4384,10 @@ async def v42_bank_chapter(query,chapter):
     archives=await db.archive_exams(chapter)
     for archive in archives:
         kb.append([InlineKeyboardButton('📂 '+archive['title'],callback_data=f"examarchive|{archive['id']}")])
-    if not rows and not archives: message="لا توجد امتحانات منشورة لهذا الفصل حاليا."
+    if not rows and not archives: message="لا توجد امتحانات منشورة لهذا الباب حاليا."
     else: message="الاخضر جاهز، والمغلق يفتح بعد اكمال محاضراته."
-    kb += [[InlineKeyboardButton("◀️ الفصول",callback_data="v42_exam_bank"),back_menu()]]
-    await query.edit_message_text(bold(f"📘 بنك امتحانات الفصل {chapter}\n{DIV}\n{message}"),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup(kb))
+    kb += [[InlineKeyboardButton("◀️ الأبواب",callback_data="v42_exam_bank"),back_menu()]]
+    await query.edit_message_text(bold(f"📘 بنك امتحانات الباب {chapter}\n{DIV}\n{message}"),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup(kb))
 
 
 async def v42_notifications_menu(query):
@@ -4394,11 +4407,11 @@ async def v42_notifications_menu(query):
 async def v42_admin_exam_list(query):
     rows=await db.v42_admin_exam_definitions(); kb=[]
     for row in rows[:80]:
-        scope="الدورة" if row.get("target_scope")=="course" else f"الفصل {row.get('chapter') or '-'}"
+        scope="الدورة" if row.get("target_scope")=="course" else f"الباب {row.get('chapter') or '-'}"
         state="🟢" if row.get("has_open") else "⚪"
         kb.append([InlineKeyboardButton(f"{state} {row['title'].replace('[تراكمي] ','')} | {scope} | 👥 {row.get('student_count',0)}",callback_data=f"v42_admin_exam|{row['id']}")])
     if not rows: text="لا توجد امتحانات منشورة حاليا."
-    else: text="كل امتحان ظاهر مرة واحدة فقط. النسخ الداخلية المنفصلة تحفظ وقت وتسليم كل طالب ولا تظهر كتكرار."
+    else: text="كل امتحان ظاهر مرة واحدة فقط. النسخ الداخلية المنوحدةة تحفظ وقت وتسليم كل طالب ولا تظهر كتكرار."
     kb += [[InlineKeyboardButton("➕ نشر امتحان",callback_data="admin_publish"),back_menu()]]
     await query.edit_message_text(bold("📝 ادارة الامتحانات\n"+DIV+"\n"+text),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup(kb))
 
@@ -4422,7 +4435,7 @@ async def v42_missing_exam_job(context):
     for prep in await db.v42_due_missing_course_exams(20):
         lectures=" + ".join(f"م{x}" for x in sorted(_v42_prep_lectures(prep)))
         try:
-            await context.bot.send_message(OWNER_CHAT_ID,bold(f"⚠️ تنبيه امتحان غير منشور\n{DIV}\nمرت 12 ساعة على نشر التحضير ولم يرتبط به امتحان بعد.\n📘 الفصل {prep['chapter']} | تحضير {prep.get('chapter_prep_no') or prep['prep_no']} | {lectures}"),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("➕ نشر الامتحان",callback_data="courseexam_start")]]))
+            await context.bot.send_message(OWNER_CHAT_ID,bold(f"⚠️ تنبيه امتحان غير منشور\n{DIV}\nوصل موعد امتحان تحضير اليوم (بعد 12 ساعة من نشر التحضير) ولم يرتبط به امتحان بعد.\n📘 الباب {prep['chapter']} | تحضير {prep.get('chapter_prep_no') or prep['prep_no']} | {lectures}"),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("➕ نشر الامتحان",callback_data="courseexam_start")]]))
             await db.v42_mark_missing_exam_reminded(prep["prep_no"])
         except TelegramError:
             logger.warning("missing exam reminder retry pending for prep %s",prep["prep_no"])
@@ -4457,7 +4470,7 @@ async def button_handler(update,context):
         task_id=int(data.split("|")[1]); task=await db.v30_exam_task_for_student(uid,task_id); student=await get_student(uid)
         if task and student and student.get("study_track")=="course" and task.get("target_scope")=="chapter":
             if task.get("closed") or (task.get("deadline") and task["deadline"]<=datetime.now(TIMEZONE)):
-                await query.answer("انتهت مدة هذا الامتحان. افتحه من بنك الفصول لبدء محاولة جديدة.",show_alert=True); return
+                await query.answer("انتهت مدة هذا الامتحان. افتحه من بنك الأبواب لبدء محاولة جديدة.",show_alert=True); return
             await query.answer(); await show_task(query,context,task_id); return
     if data=="notifications":
         await query.answer(); await v42_notifications_menu(query); return
@@ -4489,8 +4502,8 @@ async def button_handler(update,context):
         selected=state.get("selected_preps") or []; labels=[]
         for chapter,prep_no in selected:
             groups=CHAPTER_PREPARATION_DISTRIBUTION.get(int(chapter),[]); nums=groups[int(prep_no)-1] if 1<=int(prep_no)<=len(groups) else []
-            labels.append(f"الفصل {chapter} | المحاضرات "+" + ".join(str(x) for x in nums))
-        labels += [f"الفصل {chapter} | م{lecture}" for chapter,lecture in state.get("selected_lectures",[])]
+            labels.append(f"الباب {chapter} | المحاضرات "+" + ".join(str(x) for x in nums))
+        labels += [f"الباب {chapter} | م{lecture}" for chapter,lecture in state.get("selected_lectures",[])]
         await query.answer(); await query.edit_message_text(bold("🔎 تأكيد ربط الامتحان\n"+DIV+"\n"+("\n".join(f"• {x}" for x in labels) or "لا يوجد محتوى")+"\n\nتأكد من أرقام المحاضرات قبل النشر. هذا الربط ثابت ولن ينتقل إلى محاضرات أخرى."),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ نشر بهذا الربط",callback_data="v42_exam_confirm")],[InlineKeyboardButton("◀️ تعديل الاختيار",callback_data="courseexam_start" if state.get("audience")=="course" else "linkedexam_start"),back_menu()]])); return
     if data=="v42_exam_confirm":
         state=context.user_data.get("linked_exam")
@@ -4500,7 +4513,7 @@ async def button_handler(update,context):
             definition=await create_linked_exam_definition(state.get("selected_preps",[]),state["title"],uid,state["media"],state.get("audience","chapter"),state.get("selected_lectures",[]),"cumulative" if state.get("cumulative") else "normal",DEFAULT_EXAM_HOURS)
         except Exception:
             logger.exception("v42 exam publishing failed"); await query.answer("تعذر حفظ الامتحان.",show_alert=True); return
-        audience="الدورة الحالية" if state.get("audience")=="course" else f"الفصل {definition['chapter']}"
+        audience="الدورة الحالية" if state.get("audience")=="course" else f"الباب {definition['chapter']}"
         selected_text=f"{len(state.get('selected_preps',[]))} مجموعة محاضرات" if state.get('selected_preps') else "محاضرات منفردة"
         context.user_data.pop("linked_exam",None)
         if state.get("audience")=="course" and (await db.v47_course_window(definition['id']))['status']=='needs_schedule':
@@ -4508,7 +4521,7 @@ async def button_handler(update,context):
             await query.edit_message_text(f"✅ حُفظت أسئلة الامتحان رقم {definition['id']}. موعده الأصلي مضى؛ يجب تحديد وقت النشر والانتهاء قبل فتحه للطلاب.",
                 reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('🗓 تحديد الموعدين',callback_data=f"v47_window|{definition['id']}")],[back_menu()]])); return
         await query.answer("تم حفظ الامتحان")
-        await query.edit_message_text(bold(f"✅ تم حفظ الامتحان مرة واحدة\n{DIV}\n🎯 المسار: {audience}\n🎞 الربط الثابت: {selected_text}\n\n⏰ امتحان الدورة يظهر بعد 12 ساعة من نشر المحاضرات.\n📘 امتحان الفصل يظهر بعد إكمال الطالب للمحاضرات وموافقة ولي الأمر."),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup([[back_menu()]])); return
+        await query.edit_message_text(bold(f"✅ تم حفظ الامتحان مرة واحدة\n{DIV}\n🎯 المسار: {audience}\n🎞 الربط الثابت: {selected_text}\n\n⏰ امتحان الدورة يظهر بعد 12 ساعة من نشر التحضير ويستمر 24 ساعة.\n📘 امتحان الباب يظهر بعد إكمال الطالب للمحاضرات وموافقة ولي الأمر."),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup([[back_menu()]])); return
     return await _v42_previous_button_handler(update,context)
 
 
@@ -4527,11 +4540,11 @@ async def post_init(app):
 async def v42_admin_exam_list(query):
     rows=await db.v42_admin_exam_definitions(); kb=[]
     for row in rows[:80]:
-        scope="الدورة" if row.get("target_scope")=="course" else f"الفصل {row.get('chapter') or '-'}"
+        scope="الدورة" if row.get("target_scope")=="course" else f"الباب {row.get('chapter') or '-'}"
         state="🟢" if row.get("has_open") else "🔒"
         kb.append([InlineKeyboardButton(f"{state} {row['title'].replace('[تراكمي] ','')} | {scope} | 👥 {row.get('student_count',0)}",callback_data=f"v43_admin_exam|{row['id']}")])
     if not rows: text="لا توجد امتحانات منشورة حاليا."
-    else: text="اختر الامتحان لتمديده حتى بعد انتهاء وقته، او ازالة انذاراته، او ادارة كل طالب بصورة منفصلة."
+    else: text="اختر الامتحان لتمديده حتى بعد انتهاء وقته، او ازالة انذاراته، او ادارة كل طالب بصورة منوحدةة."
     kb += [[InlineKeyboardButton("➕ نشر امتحان",callback_data="admin_publish"),back_menu()]]
     await query.edit_message_text(bold("📝 مركز ادارة الامتحانات\n"+DIV+"\n"+text),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup(kb))
 
@@ -4540,7 +4553,7 @@ async def v43_admin_exam_detail(query,definition_id):
     row=await db.v43_exam_definition_detail(definition_id)
     if not row:
         await query.answer("الامتحان غير موجود.",show_alert=True); return
-    scope="الدورة الحالية" if row.get("target_scope")=="course" else f"الفصل {row.get('chapter') or '-'}"
+    scope="الدورة الحالية" if row.get("target_scope")=="course" else f"الباب {row.get('chapter') or '-'}"
     state="مفتوح لبعض الطلاب" if row.get("has_open") else "منتهي او لم يفتح بعد"
     text=(f"📝 {row['title']}\n{DIV}\n🎯 المسار: {scope}\n📌 الحالة: {state}\n"
           f"👥 الطلاب: {row.get('student_count',0)}\n✅ المسلّمين: {row.get('submitted_count',0)}\n"
@@ -4574,8 +4587,8 @@ async def v43_notify_exam_reopened(context,item,title):
     warning_text=f"\n✅ حذف البوت {removed} انذار مرتبط بهذا الامتحان." if removed else ""
     student={"user_id":item["user_id"],"full_name":item.get("student_name") or item.get("full_name") or "الطالب","parent_chat_id":item.get("parent_chat_id")}
     await notify_student_and_parent(context.bot,student,f"⏳ تم تمديد وفتح الامتحان من الادارة\n📝 {title}\n⏰ الموعد الجديد: {until}{warning_text}")
-    if removed and int(item.get("warnings") or 0)<MAX_WARNINGS and CHEMISTRY_GROUP_ID:
-        try: await context.bot.unban_chat_member(CHEMISTRY_GROUP_ID,item["user_id"],only_if_banned=True)
+    if removed and int(item.get("warnings") or 0)<MAX_WARNINGS and ARABIC_GROUP_ID:
+        try: await context.bot.unban_chat_member(ARABIC_GROUP_ID,item["user_id"],only_if_banned=True)
         except TelegramError: pass
 
 
@@ -4672,8 +4685,8 @@ async def button_handler(update,context):
             if int(item.get("warnings_removed") or 0)<=0: continue
             student={"user_id":item["user_id"],"full_name":item["full_name"],"parent_chat_id":item.get("parent_chat_id")}
             await notify_student_and_parent(context.bot,student,f"✅ ازالت الادارة انذار عدم التسليم الخاص بامتحان:\n📝 {result['title']}")
-            if int(item.get("warnings") or 0)<MAX_WARNINGS and CHEMISTRY_GROUP_ID:
-                try: await context.bot.unban_chat_member(CHEMISTRY_GROUP_ID,item["user_id"],only_if_banned=True)
+            if int(item.get("warnings") or 0)<MAX_WARNINGS and ARABIC_GROUP_ID:
+                try: await context.bot.unban_chat_member(ARABIC_GROUP_ID,item["user_id"],only_if_banned=True)
                 except TelegramError: pass
         await query.edit_message_text(bold(f"✅ تمت ازالة انذارات الامتحان\n{DIV}\n📝 {result['title']}\n⚠️ عدد الانذارات المحذوفة: {result['removed']}\nلم تتاثر بقية انذارات الطلاب."),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("◀️ الامتحان",callback_data=f"v43_admin_exam|{definition_id}"),back_menu()]])); return
     if data=="v43_warnings":
@@ -4693,8 +4706,8 @@ async def button_handler(update,context):
         if result.get("status")!="ok": await query.answer("الانذار غير موجود.",show_alert=True); return
         await query.answer("تم حذف الانذار.",show_alert=True); student=await get_student(student_id)
         if student: await notify_student_and_parent(context.bot,student,f"✅ ازالت الادارة انذارا من حسابك\nالسبب: {result['warning']['reason']}\n⚠️ المتبقي: {result['student']['warnings']}/{MAX_WARNINGS}")
-        if int(result["student"]["warnings"] or 0)<MAX_WARNINGS and CHEMISTRY_GROUP_ID:
-            try: await context.bot.unban_chat_member(CHEMISTRY_GROUP_ID,student_id,only_if_banned=True)
+        if int(result["student"]["warnings"] or 0)<MAX_WARNINGS and ARABIC_GROUP_ID:
+            try: await context.bot.unban_chat_member(ARABIC_GROUP_ID,student_id,only_if_banned=True)
             except TelegramError: pass
         await v43_student_warnings(query,student_id); return
     return await _v43_previous_button_handler(update,context)
@@ -4707,8 +4720,8 @@ async def post_init(app):
         repaired=await db.v43_repair_premature_exam_warnings()
         await set_setting_value("v43_premature_exam_warnings_repaired",str(len(repaired)))
         for item in repaired:
-            if int(item.get("warnings") or 0)<MAX_WARNINGS and CHEMISTRY_GROUP_ID:
-                try: await app.bot.unban_chat_member(CHEMISTRY_GROUP_ID,item["user_id"],only_if_banned=True)
+            if int(item.get("warnings") or 0)<MAX_WARNINGS and ARABIC_GROUP_ID:
+                try: await app.bot.unban_chat_member(ARABIC_GROUP_ID,item["user_id"],only_if_banned=True)
                 except TelegramError: pass
         if OWNER_CHAT_ID and repaired:
             try:
@@ -4752,7 +4765,7 @@ async def v44_show_today_preparation(query):
         (completed if progress and progress.get("completed_at") else available).append(lecture)
     date_value=row.get("target_date")
     date_text=date_value.strftime("%d/%m/%Y") if date_value else "-"
-    lines=["🧪 تحضيرك الحالي",DIV,f"📘 الفصل {chapter}",f"🎬 المحاضرات: {' + '.join(map(str,lectures)) or '-'}",f"📅 التاريخ: {date_text}"]
+    lines=["🧪 تحضيرك الحالي",DIV,f"📘 الباب {chapter}",f"🎬 المحاضرات: {' + '.join(map(str,lectures)) or '-'}",f"📅 التاريخ: {date_text}"]
     kb=[]
     for lecture in available:
         kb.append([InlineKeyboardButton(f"▶️ الذهاب الى المحاضرة {lecture}",callback_data=f"prepopen|{chapter}|{lecture}")])
@@ -4789,10 +4802,10 @@ async def v44_open_preparation(query,chapter,lecture):
     await query.answer("تم فتح التحضير.")
     item=PLAYLISTS[chapter][lecture-1]
     kb=InlineKeyboardMarkup([
-        [InlineKeyboardButton("▶️ مشاهدة محاضرة البوت",callback_data=f"prepwatch|{chapter}|{lecture}")],
+        [InlineKeyboardButton("▶️ دراسة صفحات الملزمة",callback_data=f"prepwatch|{chapter}|{lecture}")],
         [InlineKeyboardButton("📚 درستها من مصدر خاص",callback_data=f"prepprivate|{chapter}|{lecture}")],
         [InlineKeyboardButton("◀️ تحضير اليوم",callback_data="today_prep"),back_menu()]])
-    await query.edit_message_text(bold(f"🎬 الفصل {chapter} | المحاضرة {lecture}\n{item[1]}\n\nاختر طريقة دراستك للمحاضرة:"),parse_mode=ParseMode.HTML,reply_markup=kb)
+    await query.edit_message_text(bold(f"🎬 الباب {chapter} | المحاضرة {lecture}\n{item[1]}\n\nاختر طريقة دراستك للمحاضرة:"),parse_mode=ParseMode.HTML,reply_markup=kb)
 
 
 async def v39_daily_session(query):
@@ -4816,11 +4829,11 @@ async def v39_daily_session(query):
                 progress=await lecture_progress(uid,chapter,lecture)
                 if not progress or not progress.get("completed_at"): available.append(lecture)
             if available:
-                text=f"🎯 جلسة اليوم\n{DIV}\n📘 الفصل {chapter}\n🎬 ابدأ بالمحاضرة {available[0]}"
+                text=f"🎯 جلسة اليوم\n{DIV}\n📘 الباب {chapter}\n🎬 ابدأ بالمحاضرة {available[0]}"
                 kb=[[InlineKeyboardButton(f"▶️ الذهاب الى المحاضرة {available[0]}",callback_data=f"prepopen|{chapter}|{available[0]}")],
                     [InlineKeyboardButton("🧪 عرض التحضير كاملا",callback_data="today_prep"),back_menu()]]
             else:
-                text=f"🎯 جلسة اليوم\n{DIV}\n✅ تحضير الفصل {chapter} مكتمل.\nافتح المراجعة الملكية او انتظر التحضير التالي."
+                text=f"🎯 جلسة اليوم\n{DIV}\n✅ تحضير الباب {chapter} مكتمل.\nافتح المراجعة الملكية او انتظر التحضير التالي."
                 kb=[[InlineKeyboardButton("👑 المراجعة الملكية",callback_data="royal_review_menu")],[back_menu()]]
         else:
             text=f"🎯 جلسة اليوم\n{DIV}\n✅ لا يوجد تحضير مستحق حاليا.\nراجع المواعيد المستحقة في المراجعة الملكية."
@@ -4836,7 +4849,7 @@ async def v42_review_menu(query):
            f"🔥 مستحق الان: {len(due)}",f"✅ مكتمل: {data.get('completed',0)}",""]
     kb=[]
     if student.get("study_track")=="course":
-        lines.append("📚 تبدأ من تحضير 9 في الفصل الثالث، وما قبله غير محسوب:")
+        lines.append("📚 تبدأ من الباب الثانية، المحاضرة الأولى، وما قبلها غير محسوب:")
         groups=[]; used=set()
         for prep in data.get("preparations") or []:
             lectures=_v42_prep_lectures(prep)
@@ -4849,7 +4862,7 @@ async def v42_review_menu(query):
             kb.append([InlineKeyboardButton(f"{mark} تحضير {prep.get('chapter_prep_no') or prep['prep_no']} | ف{prep['chapter']} | {lectures}",callback_data=f"v42_review_prep|{prep['prep_no']}")])
         if not groups: lines.append("اكمل اول تحضير حتى يبني البوت مواعيد مراجعته.")
     else:
-        chapter=int(student.get("current_chapter") or 1); lines.append(f"📘 الفصل {chapter} من اول محاضرة:")
+        chapter=int(student.get("current_chapter") or 1); lines.append(f"📘 الباب {chapter} من اول محاضرة:")
         for row in due[:30]:
             kb.append([InlineKeyboardButton(f"🔥 م{row['lecture']} | المراجعة {row['stage']}",callback_data=f"royal_review|{row['id']}")])
         if pending and not due:
@@ -4879,7 +4892,7 @@ async def v41_review_reminders_job(context):
     for row in await db.v41_due_review_reminders(100):
         stage=int(row["stage"])
         title=f"👑 حان موعد {REVIEW_STAGE_LABELS[stage]}"
-        body=(f"📘 الفصل {row['chapter']} | المحاضرة {row['lecture']}\n"
+        body=(f"📘 الباب {row['chapter']} | المحاضرة {row['lecture']}\n"
               "افتح المراجعة الملكية وراجع المحاضرة، ثم ارسل القسم المخصص لاعتمادها.")
         try:
             await db.v44_queue_review_notification(row["id"],title,body)
@@ -4923,10 +4936,10 @@ async def button_handler(update,context):
         if result.get("status")!="ok":
             await query.edit_message_text(bold("⚠️ "+messages.get(result.get("status"),"تعذر تنفيذ التمديد.")),parse_mode=ParseMode.HTML,
                 reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("◀️ الامتحان",callback_data=f"task|{task_id}"),back_menu()]])); return
-        if CHEMISTRY_GROUP_ID:
+        if ARABIC_GROUP_ID:
             student=await get_student(uid)
             if student and int(student.get("warnings") or 0)<MAX_WARNINGS:
-                try: await context.bot.unban_chat_member(CHEMISTRY_GROUP_ID,uid,only_if_banned=True)
+                try: await context.bot.unban_chat_member(ARABIC_GROUP_ID,uid,only_if_banned=True)
                 except TelegramError: pass
         until=result["extended_until"].astimezone(TIMEZONE).strftime("%d/%m/%Y %H:%M")
         warning_text=f"\n✅ حذف انذار هذا الامتحان: {result.get('warnings_removed',0)}" if result.get("warnings_removed") else ""
@@ -5016,13 +5029,13 @@ async def button_handler(update,context):
         kb=InlineKeyboardMarkup([[
             InlineKeyboardButton("✅ موافقة وفتح الامتحان",callback_data=f"v45_late_decide|{request['id']}|1"),
             InlineKeyboardButton("❌ رفض",callback_data=f"v45_late_decide|{request['id']}|0")]])
+        thread_id=await ensure_student_topic(context.bot,await get_student(uid),destination)
         try:
-            thread_id=await ensure_student_topic(context.bot,await get_student(uid),destination)
             await context.bot.send_message(destination,bold(
                 f"👨‍🏫 طلب امتحان متاخر\n{DIV}\n👤 الطالب: {result['student_name']}\n📝 {task['title']}\n"
                 f"💰 الخصم عند الموافقة: {LATE_EXAM_XP_COST} XP\n⏳ مدة المحاولة: {request['hours']} ساعة"),
                 parse_mode=ParseMode.HTML,message_thread_id=thread_id,reply_markup=kb)
-        except (TelegramError, TopicRoutingError):
+        except TelegramError:
             logger.exception("late exam request delivery failed for request %s",request["id"])
             await db.v45_decide_late_exam_request(request["id"],False,0)
             await query.answer("تعذر ايصال الطلب الى الاستاذ حاليا.",show_alert=True); return
@@ -5056,10 +5069,10 @@ async def button_handler(update,context):
         if result.get("status")!="approved":
             await query.answer("تعذر معالجة الطلب.",show_alert=True); return
         until=result["extended_until"].astimezone(TIMEZONE).strftime("%d/%m/%Y %H:%M")
-        if CHEMISTRY_GROUP_ID:
+        if ARABIC_GROUP_ID:
             student=await get_student(result["user_id"])
             if student and int(student.get("warnings") or 0)<MAX_WARNINGS:
-                try: await context.bot.unban_chat_member(CHEMISTRY_GROUP_ID,result["user_id"],only_if_banned=True)
+                try: await context.bot.unban_chat_member(ARABIC_GROUP_ID,result["user_id"],only_if_banned=True)
                 except TelegramError: pass
         await query.answer("تم فتح الامتحان وخصم XP.",show_alert=True)
         try: await query.edit_message_text(bold(f"✅ تمت الموافقة على طلب الامتحان المتاخر\n{DIV}\n👤 {result['full_name']}\n📝 {result['title']}\n⏰ مفتوح لغاية: {until}\n💰 تم خصم {result['xp_cost']} XP."),parse_mode=ParseMode.HTML)
@@ -5102,7 +5115,7 @@ async def post_init(app):
 def onboarding_track_keyboard():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton('👥 أكمل مع دورتي الحالية',callback_data='onboardtrack|course')],
-        [InlineKeyboardButton('📚 اختيار فصل للدراسة',callback_data='v47_chapters')]])
+        [InlineKeyboardButton('📚 اختيار وحدة للدراسة',callback_data='v47_chapters')]])
 
 
 _v47_previous_main_menu=main_menu
@@ -5117,7 +5130,7 @@ def main_menu(admin=False):
 _v47_previous_start=start
 async def start(update,context):
     student=await get_student(update.effective_user.id)
-    if student and student.get('reset_pending'):
+    if student and student.get('reset_pending') and not is_admin(update.effective_user.id):
         context.user_data.clear(); context.user_data['registration']={}
         await update.effective_message.reply_text('✍️ أرسل اسمك الثلاثي أو الرباعي لإكمال إعادة التسجيل:')
         return REG_NAME
@@ -5161,18 +5174,18 @@ async def reg_grade(update,context):
     return ConversationHandler.END
 
 
-async def v47_finish_track(query,track,chapter=3,prep_no=1):
+async def v47_finish_track(query,track,chapter=2,prep_no=1):
     student=await db.v47_choose_track(query.from_user.id,track,chapter,prep_no,datetime.now(TIMEZONE).date())
     if not student:
         await query.answer('المسار محفوظ بالفعل، أو أكمل تسجيل معلوماتك عبر /start.',show_alert=True); return
     await query.answer('تم حفظ المسار')
     if track=='course':
-        text='✅ تم ربطك بالدورة الحالية.\nتصل محاضرات الدورة الساعة 11 ليلاً من اليوم السابق، والامتحان بعد 12 ساعة ويبقى 24 ساعة.'
+        text='✅ تم ربطك بالدورة الحالية.\nتصل محاضرات الدورة الساعة 11 ليلاً من اليوم السابق، والامتحان بعد 12 ساعة من نشر التحضير ويبقى 24 ساعة.'
     else:
         groups=CHAPTER_PREPARATION_DISTRIBUTION.get(int(chapter),[])
         numbers=', '.join(map(str,groups[int(prep_no)-1])) if 1<=int(prep_no)<=len(groups) else '-'
-        text=(f'✅ يبدأ مسارك من الفصل {chapter}، من المحاضرات {numbers}.\n'
-              'لا إنذارات على المحاضرات السابقة، وامتحانات الفصول تظهر حسب المحاضرات المكتملة.\n'
+        text=(f'✅ يبدأ مسارك من الباب {chapter}، من المحاضرات {numbers}.\n'
+              'لا إنذارات على المحاضرات السابقة، وامتحانات الأبواب تظهر حسب المحاضرات المكتملة.\n'
               'المراجعة الملكية تبدأ فقط للمحاضرات التي تكملها فعلياً.')
     if not student.get('parent_chat_id'):
         text+=f"\n\nلربط ولي الأمر يرسل من حسابه:\n/parent {student['parent_link_code']}"
@@ -5240,18 +5253,18 @@ async def button_handler(update,context):
     student=await get_student(uid) if not is_admin(uid) else None
     if data=='v47_chapters':
         await query.answer()
-        await query.edit_message_text('📚 اختر الفصل الذي تبدأ منه:',reply_markup=InlineKeyboardMarkup(
-            [[InlineKeyboardButton(f'الفصل {n}',callback_data=f'onboardtrack|{n}')] for n in range(1,8)])); return
+        await query.edit_message_text('📚 اختر الباب الذي تبدأ منه:',reply_markup=InlineKeyboardMarkup(
+            [[InlineKeyboardButton(f'الباب {n}',callback_data=f'onboardtrack|{n}')] for n in range(1,6)])); return
     if data.startswith('onboardtrack|') and student:
         choice=data.split('|')[1]
         if choice=='course':
             if student.get('reset_pending') or int(student.get('onboarding_version') or 0)<19:
                 await v47_finish_track(query,'course'); return
             return await _v47_previous_button_handler(update,context)
-        if not choice.isdigit() or int(choice) not in range(1,8): await query.answer('فصل غير صحيح.'); return
+        if not choice.isdigit() or int(choice) not in range(1,6): await query.answer('وحدة غير صحيح.'); return
         chapter=int(choice); groups=CHAPTER_PREPARATION_DISTRIBUTION.get(chapter,[])
         await query.answer()
-        await query.edit_message_text(f'📘 الفصل {chapter}: اختر أول مجموعة محاضرات تريد أن تبدأ منها.\nالمحاضرات السابقة لن تُحسب عليك كمطلوبات.',
+        await query.edit_message_text(f'📘 الباب {chapter}: اختر أول مجموعة محاضرات تريد أن تبدأ منها.\nالمحاضرات السابقة لن تُحسب عليك كمطلوبات.',
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('المحاضرات '+', '.join(map(str,nums)),callback_data=f'v47_startprep|{chapter}|{i}')] for i,nums in enumerate(groups,1)])); return
     if data.startswith('v47_startprep|'):
         try:
@@ -5262,13 +5275,13 @@ async def button_handler(update,context):
             context.user_data['v47_track_choice']=(chapter,prep,datetime.now(TIMEZONE))
             await query.answer()
             numbers=', '.join(map(str,CHAPTER_PREPARATION_DISTRIBUTION[chapter][prep-1]))
-            await query.edit_message_text(f'تأكيد تغيير المسار إلى الفصل {chapter} ابتداءً من المحاضرات {numbers}. سيُعاد تقدم هذا الفصل وما بعده. يبقى XP محفوظاً.',
+            await query.edit_message_text(f'تأكيد تغيير المسار إلى الباب {chapter} ابتداءً من المحاضرات {numbers}. سيُعاد تقدم هذا الباب وما بعده. يبقى XP محفوظاً.',
                 reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('✅ تأكيد',callback_data=f'v47_change_confirm|{chapter}|{prep}')],[back_menu()]])); return
         await v47_finish_track(query,'chapter',chapter,prep); return
     if data.startswith('v47_change_confirm|'):
         confirmed=context.user_data.pop('v47_track_choice',None)
         if not confirmed or (datetime.now(TIMEZONE)-confirmed[2]).total_seconds()>600 or data!=f'v47_change_confirm|{confirmed[0]}|{confirmed[1]}':
-            await query.answer('اختر الفصل ومجموعة المحاضرات من جديد لتأكيد التغيير.',show_alert=True); return
+            await query.answer('اختر الباب ومجموعة المحاضرات من جديد لتأكيد التغيير.',show_alert=True); return
         if not student or student.get('reset_pending'): await query.answer('أكمل التسجيل أولاً.'); return
         try:
             _,ch,number=data.split('|'); chapter=int(ch); prep=int(number)
@@ -5280,7 +5293,7 @@ async def button_handler(update,context):
             if result['status']=='ok' else '⏳ استُنفدت التغييرات الثلاثة؛ طلب المسار ومجموعة المحاضرات المحددة ينتظر موافقة الإدارة.'
             if result['status']=='pending' else 'تعذر تغيير المسار.')
         if result['status']=='pending' and OWNER_CHAT_ID:
-            await context.bot.send_message(OWNER_CHAT_ID,f'طلب تغيير مسار للطالب {uid}: الفصل {chapter}، مجموعة المحاضرات {prep}.',
+            await context.bot.send_message(OWNER_CHAT_ID,f'طلب تغيير مسار للطالب {uid}: الباب {chapter}، مجموعة المحاضرات {prep}.',
                 reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('مراجعة الطلب',callback_data='track_change_requests')]]))
         await query.edit_message_text(message,reply_markup=main_menu()); return
     if student and student.get('reset_pending'):
@@ -5291,13 +5304,13 @@ async def button_handler(update,context):
         await query.answer(); await show_task(query,context,identifier); return
     if data.startswith('chapter_exam|') and student:
         try: chapter=int(data.split('|')[1])
-        except ValueError: await query.answer('فصل غير صحيح.'); return
+        except ValueError: await query.answer('وحدة غير صحيح.'); return
         await query.answer(); await v42_bank_chapter(query,chapter); return
     if data=='exams_menu' and student and student.get('study_track')=='chapter':
         await query.answer()
-        await query.edit_message_text('📝 الامتحانات\nامتحان محاضراتك يفتح بعد إكمالها وموافقة ولي الأمر، وبنك الامتحانات مرتب حسب الفصل والمحاضرة.',
+        await query.edit_message_text('📝 الامتحانات\nامتحان محاضراتك يفتح بعد إكمالها وموافقة ولي الأمر، وبنك الامتحانات مرتب حسب الباب والمحاضرة.',
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('📝 امتحاناتي المطلوبة',callback_data='tasks|exam|normal')],
-                [InlineKeyboardButton('📚 بنك امتحانات الفصول',callback_data='v42_exam_bank')],[back_menu()]])); return
+                [InlineKeyboardButton('📚 بنك امتحانات الأبواب',callback_data='v42_exam_bank')],[back_menu()]])); return
     return await _v47_previous_button_handler(update,context)
 
 
@@ -5306,7 +5319,7 @@ async def show_task(query,context,task_id):
     task=await get_task(task_id)
     if not is_admin(query.from_user.id):
         student=await get_student(query.from_user.id)
-        if not student or not student.get('approved') or student.get('reset_pending') or (not student.get('parent_chat_id') and not student.get('admin_manual_active')):
+        if not student or not student.get('approved') or student.get('reset_pending') or not student.get('parent_chat_id'):
             await query.answer('هذه الخدمة تحتاج حساباً مفعلاً وربط ولي الأمر.',show_alert=True);return
         if not await is_channel_member(context.bot,query.from_user.id):
             await query.answer('اشترك بالقناة المطلوبة أولاً.',show_alert=True);return
@@ -5399,9 +5412,9 @@ async def v48_quick_student_menu(query):
     chapters=sorted({int(r['chapter']) for r in catalog}); rows=[]
     for chapter in chapters:
         count=sum(int(r['question_count']) for r in catalog if int(r['chapter'])==chapter)
-        rows.append([InlineKeyboardButton(f'الفصل {chapter} | {count} سؤال',callback_data=f'v48qsch|{chapter}')])
+        rows.append([InlineKeyboardButton(f'الباب {chapter} | {count} سؤال',callback_data=f'v48qsch|{chapter}')])
     if not rows: text='📭 لم يضف الاستاذ اسئلة مراجعة سريعة لمسارك بعد.'
-    else: text='⚡ اختبارات المراجعة السريعة\nاختر الفصل، ثم التحضير. اكشف الجواب بعد ان تحاول تذكره بنفسك.'
+    else: text='⚡ اختبارات المراجعة السريعة\nاختر الباب، ثم التحضير. اكشف الجواب بعد ان تحاول تذكره بنفسك.'
     rows.append([InlineKeyboardButton('◀️ المراجعة الملكية',callback_data='royal_review_menu'),back_menu()])
     await query.edit_message_text(text,reply_markup=InlineKeyboardMarkup(rows))
 
@@ -5409,15 +5422,15 @@ async def v48_quick_student_menu(query):
 async def v48_quick_student_chapter(query,chapter):
     catalog=[r for r in await db.v48_quick_review_catalog(query.from_user.id) if int(r['chapter'])==int(chapter)]
     rows=[[InlineKeyboardButton(f"تحضير {r['prep_no']} | {r['question_count']} سؤال",callback_data=f"v48qsp|{chapter}|{r['prep_no']}")] for r in catalog]
-    rows.append([InlineKeyboardButton('◀️ الفصول',callback_data='v48_quick_reviews'),back_menu()])
-    await query.edit_message_text(f'⚡ الفصل {chapter}\nاختر التحضير:',reply_markup=InlineKeyboardMarkup(rows))
+    rows.append([InlineKeyboardButton('◀️ الأبواب',callback_data='v48_quick_reviews'),back_menu()])
+    await query.edit_message_text(f'⚡ الباب {chapter}\nاختر التحضير:',reply_markup=InlineKeyboardMarkup(rows))
 
 
 async def v48_quick_student_prep(query,chapter,prep_no):
     questions=await db.v48_quick_review_questions(chapter,prep_no)
     rows=[[InlineKeyboardButton(f'سؤال تنشيط الذاكرة {index}',callback_data=f"v48qopen|{row['id']}")] for index,row in enumerate(questions,1)]
     rows.append([InlineKeyboardButton('◀️ التحاضير',callback_data=f'v48qsch|{chapter}'),back_menu()])
-    await query.edit_message_text(f'⚡ الفصل {chapter} - تحضير {prep_no}\nاختر سؤالا وحاول الاجابة قبل كشف الحل:',reply_markup=InlineKeyboardMarkup(rows))
+    await query.edit_message_text(f'⚡ الباب {chapter} - تحضير {prep_no}\nاختر سؤالا وحاول الاجابة قبل كشف الحل:',reply_markup=InlineKeyboardMarkup(rows))
 
 
 async def _v48_send_quick_payload(bot,chat_id,payload_type,file_id,text,reply_markup=None,title=None):
@@ -5444,11 +5457,8 @@ async def v48_capture_quick_review(update,context):
         item['payload_type'],item['file_id'],item['text'],update.effective_user.id)
     context.user_data.pop('v48_quick_add',None)
     if not row: await msg.reply_text('تعذر حفظ السؤال. اعد المحاولة من لوحة الادارة.'); return True
-    await msg.reply_text(f"✅ حفظ السؤال رقم {row['id']} في الفصل {row['chapter']} - تحضير {row['prep_no']}.",reply_markup=main_menu(True)); return True
+    await msg.reply_text(f"✅ حفظ السؤال رقم {row['id']} في الباب {row['chapter']} - تحضير {row['prep_no']}.",reply_markup=main_menu(True)); return True
 
-
-from student_submission_topics import StudentTopicRouter, TopicRoutingError
-_submission_topic_router = StudentTopicRouter(db)
 
 async def _v48_deliver_submission_row(bot,row):
     """Deliver only inside the student's named forum topic, never General."""
@@ -5521,11 +5531,11 @@ async def receive_submission(update: Update,context: ContextTypes.DEFAULT_TYPE):
     task_id=context.user_data.get('waiting_submission')
     if not task_id: return False
     student=await get_student(update.effective_user.id)
-    if not student or not student.get('approved') or (not student.get('parent_chat_id') and not student.get('admin_manual_active') and not await db.chem6_listener(update.effective_user.id)) or (not student.get('admin_manual_active') and not await is_channel_member(context.bot,update.effective_user.id)):
+    if not student or not student.get('approved') or (not student.get('parent_chat_id') and not student.get('admin_manual_active') and not await db.ar6_listener(update.effective_user.id)) or (not student.get('admin_manual_active') and not await is_channel_member(context.bot,update.effective_user.id)):
         context.user_data.pop('waiting_submission',None)
         await update.effective_message.reply_text(bold('🔒 لا يمكنك التسليم: يجب تفعيل الحساب وربط ولي الامر والاشتراك بالقناة.'),parse_mode=ParseMode.HTML); return True
     task=await get_task(task_id); effective=await effective_task_deadline(task_id,update.effective_user.id) if task else None
-    if not task or not effective or not effective.get('assigned') or datetime.now(TIMEZONE)>=effective['deadline']:
+    if not task or not effective or not effective.get('assigned') or (task['kind']!='homework' and datetime.now(TIMEZONE)>=effective['deadline']):
         context.user_data.pop('waiting_submission',None)
         await update.effective_message.reply_text(bold('⏰ انتهى وقت التسليم. استخدم التمديد او اطلب موافقة الاستاذ ثم اعد الارسال.'),parse_mode=ParseMode.HTML); return True
     msg=update.effective_message; media=msg.document or (msg.photo[-1] if msg.photo else None) or msg.video
@@ -5535,16 +5545,24 @@ async def receive_submission(update: Update,context: ContextTypes.DEFAULT_TYPE):
     if not destination:
         await msg.reply_text(bold('⚠️ وجهة استلام الحلول غير مضبوطة. لم يسجل الحل، تواصل مع الادارة.'),parse_mode=ParseMode.HTML); return True
     payload_type='document' if msg.document else 'photo' if msg.photo else 'video'
+    from submission_uploads import upload_group, upload_keyboard, MAX_SUBMISSION_FILES
+    submission_group=upload_group(context.user_data,task_id)
+    upload_kb=upload_keyboard(globals(),task_id)
     staged=await db.v48_stage_submission_delivery(task_id,update.effective_user.id,msg.message_id,payload_type,
-        media.file_id,media.file_unique_id,msg.media_group_id,destination,None)
+        media.file_id,media.file_unique_id,submission_group,destination,None)
     status=staged.get('status')
+    if status=='photo_limit':
+        await msg.reply_text(bold(f'⚠️ الحد الأقصى {MAX_SUBMISSION_FILES} صورة أو ملف لكل تسليم. اضغط إنهاء التسليم.'),parse_mode=ParseMode.HTML,reply_markup=upload_kb); return True
     if status=='delivered':
-        context.user_data.pop('waiting_submission',None)
-        await msg.reply_text('✅ هذا الحل مسجل وواصل الى الاستاذ مسبقا.')
+        await msg.reply_text(bold('✅ هذا الملف واصل للأستاذ مسبقاً. أكمل بقية الصور أو اضغط إنهاء التسليم.'),parse_mode=ParseMode.HTML,reply_markup=upload_kb)
         await _v49_delete_private_answer(context.bot,staged.get('delivery')); return True
+    if status=='model_answer_locked':
+        context.user_data.pop('waiting_submission',None)
+        await msg.reply_text('🔒 وصل الجواب النموذجي؛ تغيير الإجابة يحتاج طلباً من الأستاذ.'); return True
     if status in ('expired','not_allowed'):
         context.user_data.pop('waiting_submission',None)
-        await msg.reply_text('⏰ انتهت صلاحية التسليم او تغيرت حالة الامتحان. افتحه من جديد بعد التمديد.'); return True
+        message=('⏰ انتهت مهلة التسليم. اطلب تمديداً ثم أعد الإرسال.' if status=='expired' else '🔒 التسليم غير متاح: قد تكون الإجابة مسلّمة مسبقاً أو الامتحان بانتظار الموافقة. افتح الامتحان لعرض حالته، أو اطلب من الأستاذ تغيير الإجابة.')
+        await msg.reply_text(message); return True
     if status=='duplicate':
         await msg.reply_text('🚫 هذا الملف مسجل كتسليم سابق لطالب اخر. ارسل ملف اجابتك الاصلي.'); return True
     # The outbox is durable, but no submission is allowed in General.
@@ -5554,10 +5572,10 @@ async def receive_submission(update: Update,context: ContextTypes.DEFAULT_TYPE):
         logger.warning('Student topic not ready, submission queued: user=%s chat=%s: %s',
                        update.effective_user.id,destination,exc)
         await db.v48_mark_delivery_retry(staged['delivery']['id'],exc,SUBMISSION_RETRY_SECONDS)
-        await msg.reply_text(bold('⏳ حفظت إجابتك، لكن توبكك الخاص غير متاح حالياً. لم تُرسل إلى General. سيعيد البوت المحاولة تلقائياً.'),parse_mode=ParseMode.HTML)
+        await msg.reply_text(bold('⏳ حفظت إجابتك، لكن توبكك الخاص غير متاح حالياً. لم تُرسل إلى General. سيعيد البوت المحاولة تلقائياً.'),parse_mode=ParseMode.HTML,reply_markup=upload_kb)
         return True
     staged=await db.v48_stage_submission_delivery(task_id,update.effective_user.id,msg.message_id,payload_type,
-        media.file_id,media.file_unique_id,msg.media_group_id,destination,thread_id)
+        media.file_id,media.file_unique_id,submission_group,destination,thread_id)
     if staged.get('status')!='ok':
         await msg.reply_text('⚠️ تغيّرت حالة التسليم أثناء إنشاء التوبك. افتح المهمة مجدداً.');return True
     row={**dict(staged['delivery']),'title':task['title'],'kind':task['kind'],'full_name':student['full_name'],'parent_chat_id':student.get('parent_chat_id')}
@@ -5566,29 +5584,29 @@ async def receive_submission(update: Update,context: ContextTypes.DEFAULT_TYPE):
     except Exception as exc:
         logger.exception('Durable submission delivery queued: task=%s user=%s',task_id,update.effective_user.id)
         await db.v48_mark_delivery_retry(row['id'],exc,SUBMISSION_RETRY_SECONDS)
-        await msg.reply_text(bold('⏳ حفظ البوت الحل في طابور مضمون، لكنه لم يصل الى الاستاذ بعد. سيعيد الارسال تلقائيا ويبلغك عند نجاحه.'),parse_mode=ParseMode.HTML)
+        await msg.reply_text(bold('⏳ حفظ البوت الحل في طابور مضمون، لكنه لم يصل الى الاستاذ بعد. سيعيد الارسال تلقائيا ويبلغك عند نجاحه.'),parse_mode=ParseMode.HTML,reply_markup=upload_kb)
         return True
     if result not in ('added','replaced','album_part','delivered'):
         context.user_data.pop('waiting_submission',None)
         text='⏰ انتهى الوقت اثناء الرفع. لم يسجل الحل.' if result=='expired' else '🔒 لم يسجل الحل بسبب تغير صلاحية الامتحان.'
         await msg.reply_text(text); return True
-    first=result=='added'; same_album=result=='album_part'
+    first=result=='added'
     speed_reward=await db.v54_exam_speed_reward(task_id,update.effective_user.id) if task['kind']=='exam' else None
     if first and student.get('parent_chat_id'):
         noun='الواجب' if task['kind']=='homework' else 'الامتحان'
         try: await context.bot.send_message(student['parent_chat_id'],bold(f"✅ تم تسجيل ووصول {noun}\n👤 الطالب: {student['full_name']}\n📌 {task['title']}"),parse_mode=ParseMode.HTML)
         except TelegramError: pass
+    # One logical answer can contain several Telegram albums or single photos.
+    # Quiet-time notifications never close it; the student presses Finish.
+    token=time.monotonic(); state=context.user_data.get('submission_album')
+    if not state or state.get('id')!=submission_group or state.get('task_id')!=task_id:
+        context.user_data['submission_album']={'id':submission_group,'task_id':task_id,'added':first,'token':token}
+    else: state['token']=token
     if msg.media_group_id:
-        token=time.monotonic(); state=context.user_data.get('submission_album')
-        if not state or state.get('id')!=msg.media_group_id or state.get('task_id')!=task_id:
-            context.user_data['submission_album']={'id':msg.media_group_id,'task_id':task_id,'added':first,'token':token}
-        else: state['token']=token
-        context.job_queue.run_once(finalize_album_submission,8,data={'user_id':update.effective_user.id,'media_group_id':msg.media_group_id,'token':token})
-    elif not same_album:
-        context.user_data.pop('waiting_submission',None)
-        kb=InlineKeyboardMarkup([[InlineKeyboardButton('✅ الاجابة صحيحة',callback_data=f'submissionok|{task_id}'),InlineKeyboardButton('🔄 تغيير الاجابة',callback_data=f'retrysubmission|{task_id}')],[InlineKeyboardButton('🎬 فتح المحاضرات التالية',callback_data='today_prep')]])
-        bonus=(f"\n🏆 ترتيبك {speed_reward['submission_rank']} وحصلت على +{speed_reward['bonus_xp']} XP سرعة." if speed_reward else '')
-        await msg.reply_text(bold('✅ تم تسجيل الحل ووصل الى الاستاذ بنجاح.\n⭐ احتسبت نقاط المهمة مرة واحدة.'+bonus),parse_mode=ParseMode.HTML,reply_markup=kb)
+        context.job_queue.run_once(finalize_album_submission,8,data={'user_id':update.effective_user.id,'media_group_id':submission_group,'token':token})
+    else:
+        bonus=(f"\n🏆 ترتيبك {speed_reward['submission_rank']} وحصلت على +{speed_reward['bonus_xp']} XP سرعة." if first and speed_reward else '')
+        await msg.reply_text(bold(f'✅ وصل الملف إلى الأستاذ.{bonus}\n📎 يمكنك إكمال الحل حتى {MAX_SUBMISSION_FILES} صورة أو ملف، ثم اضغط «إنهاء التسليم».'),parse_mode=ParseMode.HTML,reply_markup=upload_kb)
     await _v49_delete_private_answer(context.bot,row)
     return True
 
@@ -5653,14 +5671,14 @@ async def button_handler(update,context):
         await query.answer(); await v48_admin_quick_menu(query); return
     if data=='v48qadd':
         if not is_admin(uid): await query.answer('للادارة فقط.',show_alert=True); return
-        rows=[[InlineKeyboardButton(f'الفصل {n}',callback_data=f'v48qaddc|{n}')] for n in range(1,8)]+[[back_menu()]]
-        await query.answer(); await query.edit_message_text('اختر فصل سؤال المراجعة السريعة:',reply_markup=InlineKeyboardMarkup(rows)); return
+        rows=[[InlineKeyboardButton(f'الباب {n}',callback_data=f'v48qaddc|{n}')] for n in range(1,6)]+[[back_menu()]]
+        await query.answer(); await query.edit_message_text('اختر وحدة سؤال المراجعة السريعة:',reply_markup=InlineKeyboardMarkup(rows)); return
     if data.startswith('v48qaddc|'):
         if not is_admin(uid): await query.answer('للادارة فقط.',show_alert=True); return
         chapter=int(data.split('|')[1]); groups=CHAPTER_PREPARATION_DISTRIBUTION.get(chapter,[])
         rows=[[InlineKeyboardButton(f"تحضير {i} - محاضرات {', '.join(map(str,lectures))}",callback_data=f'v48qaddp|{chapter}|{i}')] for i,lectures in enumerate(groups,1)]
-        rows.append([InlineKeyboardButton('◀️ الفصول',callback_data='v48qadd'),back_menu()])
-        await query.answer(); await query.edit_message_text(f'اختر تحضير الفصل {chapter}:',reply_markup=InlineKeyboardMarkup(rows)); return
+        rows.append([InlineKeyboardButton('◀️ الأبواب',callback_data='v48qadd'),back_menu()])
+        await query.answer(); await query.edit_message_text(f'اختر تحضير الباب {chapter}:',reply_markup=InlineKeyboardMarkup(rows)); return
     if data.startswith('v48qaddp|'):
         if not is_admin(uid): await query.answer('للادارة فقط.',show_alert=True); return
         _,chapter,prep=data.split('|'); context.user_data['v48_quick_add']={'chapter':int(chapter),'prep_no':int(prep),'step':'question'}
@@ -5670,7 +5688,7 @@ async def button_handler(update,context):
         _,chapter,prep=data.split('|'); questions=await db.v48_quick_review_questions(int(chapter),int(prep))
         rows=[[InlineKeyboardButton(f'🗑 حذف السؤال {index}',callback_data=f"v48qdelask|{row['id']}")] for index,row in enumerate(questions,1)]
         rows.append([InlineKeyboardButton('◀️ بنك الاسئلة',callback_data='v48_quick_admin'),back_menu()])
-        await query.answer(); await query.edit_message_text(f'اسئلة الفصل {chapter} - تحضير {prep}: {len(questions)}',reply_markup=InlineKeyboardMarkup(rows)); return
+        await query.answer(); await query.edit_message_text(f'اسئلة الباب {chapter} - تحضير {prep}: {len(questions)}',reply_markup=InlineKeyboardMarkup(rows)); return
     if data.startswith('v48qdelask|'):
         if not is_admin(uid): await query.answer('للادارة فقط.',show_alert=True); return
         question_id=int(data.split('|')[1]); await query.answer(); await query.edit_message_text('هل تريد حذف هذا السؤال من واجهة الطلاب؟',reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('✅ نعم',callback_data=f'v48qdelok|{question_id}')],[InlineKeyboardButton('❌ الغاء',callback_data='v48_quick_admin')]])); return
@@ -5742,9 +5760,9 @@ async def button_handler(update,context):
     if data=='xp_store':
         wallets=await db.v48_student_wallets(uid)
         if wallets:
-            active='الدورة' if wallets.get('study_track')=='course' else 'الفصول المستقلة'
+            active='الدورة' if wallets.get('study_track')=='course' else 'الأبواب المستقلة'
             kb=InlineKeyboardMarkup([[InlineKeyboardButton('⏳ تمديد امتحان - 150 XP',callback_data='exams_menu')],[InlineKeyboardButton('🏖 اجازة يوم كامل - 400 XP',callback_data='leave_menu')],[InlineKeyboardButton('⚠️ فك انذار - 500 XP',callback_data='buy_unwarn')],[back_menu()]])
-            await query.answer(); await query.edit_message_text(f"⭐ ارصدتك المنفصلة\n{DIV}\n👥 رصيد الدورة: {wallets['course_xp']} XP\n📚 رصيد الفصول المستقلة: {wallets['chapter_xp']} XP\n\nالرصيد المستخدم حاليا: {wallets['xp']} XP - مسار {active}.\nلا ينتقل الرصيد بين المسارين.",reply_markup=kb); return
+            await query.answer(); await query.edit_message_text(f"⭐ ارصدتك المنوحدةة\n{DIV}\n👥 رصيد الدورة: {wallets['course_xp']} XP\n📚 رصيد الأبواب المستقلة: {wallets['chapter_xp']} XP\n\nالرصيد المستخدم حاليا: {wallets['xp']} XP - مسار {active}.\nلا ينتقل الرصيد بين المسارين.",reply_markup=kb); return
     return await _v48_previous_button_handler(update,context)
 
 
@@ -5902,8 +5920,8 @@ async def button_handler(update,context):
             f"📦 حجم قاعدة البيانات الحالية\n{DIV}\n"
             f"🗄 القاعدة: {stats['database_name']}\n"
             f"📊 الحجم الكلي: {stats['database_pretty']}\n"
-            f"🧪 جداول البوت: {stats['chemistry_pretty']}\n"
-            f"📋 عدد جداول البوت: {stats['chemistry_tables']}\n\n"
+            f"🧪 جداول البوت: {stats['arabic_pretty']}\n"
+            f"📋 عدد جداول البوت: {stats['arabic_tables']}\n\n"
             "Telegram يحتفظ بالصور والفيديوات؛ قاعدة Neon تخزن معرفات الملفات والسجلات فقط، لذلك حذف امتحان لا يساوي حجم الصور المنشورة."),
             parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup([[back_menu()]])); return
     if data=='v49_cleanup':
@@ -6028,7 +6046,7 @@ async def is_channel_member(bot,user_id):
 
 
 async def is_group_member(bot,user_id):
-    return await _v51_cached_membership(bot,CHEMISTRY_GROUP_ID,user_id)
+    return await _v51_cached_membership(bot,ARABIC_GROUP_ID,user_id)
 
 
 def _v51_neutral_button(text,callback_data=None,**kwargs):
@@ -6084,7 +6102,7 @@ async def v51_menu(query):
     admin=is_admin(query.from_user.id)
     student=None if admin else await get_student(query.from_user.id)
     allowed=admin or bool(student and student.get('approved') and not student.get('reset_pending'))
-    title='👑 مركز إدارة الكيمياء' if admin else '🧪 منصة المجتهد التعليمية'
+    title='👑 مركز إدارة اللغة العربية' if admin else '🧪 منصة المجتهد التعليمية'
     note='إدارة مرتبة وسريعة لكل أقسام الدورة.' if admin else 'اختر مهمتك؛ كل قسم في مكان واحد من دون تكرار.'
     await query.edit_message_text(bold(f'{title}\n{DIV}\n{note}'),parse_mode=ParseMode.HTML,
         reply_markup=main_menu(admin) if allowed else guest_menu())
@@ -6093,6 +6111,7 @@ async def v51_menu(query):
 async def v51_account_settings(query):
     if is_admin(query.from_user.id):
         kb=InlineKeyboardMarkup([
+            [InlineKeyboardButton('👑 إدارة الأدمن بالـ ID',callback_data='manual_admin_help',style='primary')],
             [InlineKeyboardButton('📦 حجم قاعدة البيانات',callback_data='v50_db_storage',style='primary'),
              InlineKeyboardButton('🧹 تنظيف الإجابات',callback_data='v49_cleanup',style='primary')],
             [back_menu()]])
@@ -6106,7 +6125,7 @@ async def v51_account_settings(query):
          InlineKeyboardButton('👨‍👩‍👦 ولي الأمر',callback_data='parent_link',style='primary')],
         [_v51_neutral_button('✏️ تعديل معلوماتي',callback_data='edit_profile')],
         [_v51_neutral_button(f'📚 عدد التحاضير يومياً: {goal}',callback_data='v51_review_goal')],
-        [_v51_neutral_button('🔄 تغيير فصل البداية أو المسار',callback_data='change_study_track')],
+        [_v51_neutral_button('🔄 تغيير وحدة البداية أو المسار',callback_data='change_study_track')],
         [_v51_neutral_button('🗓 جدولي الدراسي',callback_data='personal_schedule')],
         [InlineKeyboardButton('🗑 حذف حسابي',callback_data='self_delete',style='danger')],
         [InlineKeyboardButton('🗑 إعادة تعيين معلوماتي بالكامل',callback_data='v47_reset',style='danger')],
@@ -6118,7 +6137,7 @@ async def v51_exams_menu(query):
     kb=InlineKeyboardMarkup([
         [InlineKeyboardButton('📝 امتحاناتي المطلوبة',callback_data='tasks|exam|normal',style='primary')],
         [InlineKeyboardButton('🏆 امتحانات تراكمي',callback_data='tasks|exam|cumulative',style='primary')],
-        [_v51_neutral_button('📚 بنك امتحانات الفصول',callback_data='v42_exam_bank'),
+        [_v51_neutral_button('📚 بنك امتحانات الأبواب',callback_data='v42_exam_bank'),
          _v51_neutral_button('🗂 الامتحانات السابقة',callback_data='past_exams')],
         [InlineKeyboardButton('✅ الأجوبة النموذجية',callback_data='resourcecategory|model_answer',style='success')],
         [back_menu()]])
@@ -6155,7 +6174,7 @@ async def v51_daily_tasks_menu(query):
     kb=[]; count=0
     if prep and prep.get('pending_lectures'):
         pending=' + '.join(f"م{n}" for n in prep['pending_lectures'])
-        lines.append(f"🧪 التحضير: الفصل {prep['chapter']} | {pending}"); count+=1
+        lines.append(f"🧪 التحضير: الباب {prep['chapter']} | {pending}"); count+=1
         kb.append([InlineKeyboardButton('🧪 فتح تحضير اليوم',callback_data='today_prep',style='success')])
     elif prep:
         lines.append('✅ تحضير اليوم مكتمل')
@@ -6201,7 +6220,7 @@ async def v51_today_preparation(query):
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('✅ مهامي اليومية',callback_data='daily_learning_session',style='success')],[back_menu()]])); return
     chapter=int(prep['chapter']); lectures=list(prep.get('pending_lectures') or [])
     all_lectures=list(prep.get('pending_lectures') or [])+list(prep.get('completed_lectures') or [])
-    lines=['🧪 تحضيرك الحالي',DIV,f'📘 الفصل {chapter}',
+    lines=['🧪 تحضيرك الحالي',DIV,f'📘 الباب {chapter}',
         '🎬 المحاضرات: '+(' + '.join(map(str,sorted(all_lectures))) or '-')]
     if prep.get('target_date'): lines.append(f"📅 التاريخ: {prep['target_date']:%d/%m/%Y}")
     if prep.get('completed_lectures'):
@@ -6224,17 +6243,17 @@ async def v51_review_menu(query):
     pending=data.get('pending') or []; goal=max(1,min(5,int(student.get('daily_prep_goal') or student.get('review_daily_goal') or 1)))
     due=[row for row in pending if row.get('due')]
     lines=['👑 المراجعة الملكية',DIV,
-        'تبدأ من الفصل الأول للجميع، وتُبنى فقط على المحاضرات التي درستها فعلياً.',
+        'تبدأ من الباب الأولى للجميع، وتُبنى فقط على المحاضرات التي درستها فعلياً.',
         '1️⃣ بعد 6 ساعات  •  2️⃣ بعد 24 ساعة',
         '3️⃣ بعد أسبوع   •  4️⃣ بعد شهر','',
         f'📚 نظامك الدراسي: {goal} تحضير يومياً',f'🔥 مستحق الآن: {len(due)}',
         f"✅ مراجعات مكتملة: {data.get('completed',0)}"]
     kb=[]
-    for chapter in range(1,8):
+    for chapter in range(1,6):
         chapter_rows=[row for row in pending if int(row['chapter'])==chapter]
         chapter_due=sum(bool(row.get('due')) for row in chapter_rows)
         kb.append([InlineKeyboardButton(
-            f"📘 الفصل {chapter} | 🔥 {chapter_due} | ⏳ {len(chapter_rows)-chapter_due}",
+            f"📘 الباب {chapter} | 🔥 {chapter_due} | ⏳ {len(chapter_rows)-chapter_due}",
             callback_data=f'v51_review_chapter|{chapter}',style='primary')])
     kb.append([_v51_neutral_button('⚡ اختبارات المراجعة السريعة',callback_data='v48_quick_reviews')])
     kb.append([_v51_neutral_button(f'⚙️ عدد التحاضير اليومية: {goal}',callback_data='v51_review_goal')])
@@ -6248,7 +6267,7 @@ async def v51_review_chapter(query,chapter):
     pending=[row for row in data.get('pending') or [] if int(row['chapter'])==int(chapter)]
     groups=defaultdict(list)
     for row in pending: groups[_v51_prep_number(chapter,row['lecture'])].append(row)
-    lines=[f'👑 المراجعة الملكية | الفصل {chapter}',DIV,f'🎯 حدك اليومي: {goal} تحضير']
+    lines=[f'👑 المراجعة الملكية | الباب {chapter}',DIV,f'🎯 حدك اليومي: {goal} تحضير']
     kb=[]; shown=0
     for prep_no in sorted(groups):
         rows=groups[prep_no]; due=[row for row in rows if row.get('due')]
@@ -6264,8 +6283,8 @@ async def v51_review_chapter(query,chapter):
         first=upcoming[0]; stamp=first['due_at'].astimezone(TIMEZONE).strftime('%d/%m %H:%M')
         lines += ['',f"⏳ أقرب مراجعة: م{first['lecture']} في {stamp}"]
     elif not pending:
-        lines += ['','لا توجد مراجعات لهذا الفصل بعد. أكمل أي محاضرة منه فينشئ البوت مواعيدها الأربع تلقائياً.']
-    kb += [[_v51_neutral_button('◀️ جميع الفصول',callback_data='royal_review_menu'),back_menu()]]
+        lines += ['','لا توجد مراجعات لهذا الباب بعد. أكمل أي محاضرة منه فينشئ البوت مواعيدها الأربع تلقائياً.']
+    kb += [[_v51_neutral_button('◀️ جميع الأبواب',callback_data='royal_review_menu'),back_menu()]]
     await query.edit_message_text(bold('\n'.join(lines)),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup(kb))
 
 
@@ -6320,6 +6339,7 @@ async def v51_admin_students_menu(query):
     await query.edit_message_text(bold(text),parse_mode=ParseMode.HTML,reply_markup=kb)
 
 
+
 async def v51_admin_students_page(query,filter_name,page):
     rows=await db.v51_admin_students()
     filters={
@@ -6349,9 +6369,10 @@ async def v51_admin_students_page(query,filter_name,page):
     await query.edit_message_text(bold('\n\n'.join(lines)),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup(kb))
 
 
+
 async def v51_admin_parents_menu(query):
     rows=await db.v51_admin_parents(); active=[r for r in rows if r.get('approved')]
-    pending=[r for r in rows if not r.get('approved') and not r.get('admin_blocked')]
+    pending=[r for r in rows if not r.get('approved')]
     unique=len({int(r['parent_chat_id']) for r in rows})
     text=(f'👪 إدارة أولياء الأمور\n{DIV}\n👤 الحسابات الفريدة: {unique}\n'
           f'🔗 روابط الطلاب: {len(rows)}\n✅ مفعلة: {len(active)}\n⏳ بانتظار التفعيل: {len(pending)}')
@@ -6386,7 +6407,7 @@ async def v51_admin_parents_page(query,filter_name,page):
 async def v51_preparation_admin_menu(query):
     row=await next_unpublished_preparation()
     if row:
-        current=(f"📌 المجموعة القادمة: الفصل {row['chapter']}\n"
+        current=(f"📌 المجموعة القادمة: الباب {row['chapter']}\n"
                  f"🎬 المحاضرات: {row['lectures']}\n📅 {row['target_date']:%d/%m/%Y}")
     else: current='📭 لا توجد مجموعة محاضرات آلية قادمة.'
     kb=InlineKeyboardMarkup([
@@ -6400,9 +6421,9 @@ async def v51_preparation_admin_menu(query):
 
 
 async def v51_preparation_chapters(query):
-    rows=[[InlineKeyboardButton(f'الفصل {n}',callback_data=f'v51_prep_chapter|{n}',style='primary')] for n in range(1,8)]
+    rows=[[InlineKeyboardButton(f'الباب {n}',callback_data=f'v51_prep_chapter|{n}',style='primary')] for n in range(1,6)]
     rows.append([_v51_neutral_button('◀️ إدارة التحاضير',callback_data='prep_schedule'),back_menu()])
-    await query.edit_message_text(bold('✏️ تعديل مجموعات المحاضرات\n'+DIV+'\nاختر الفصل:'),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup(rows))
+    await query.edit_message_text(bold('✏️ تعديل مجموعات المحاضرات\n'+DIV+'\nاختر الباب:'),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup(rows))
 
 
 async def v51_preparation_chapter(query,chapter):
@@ -6410,8 +6431,8 @@ async def v51_preparation_chapter(query,chapter):
     for prep_no,lectures in enumerate(groups,1):
         label=' + '.join(f'م{n}' for n in lectures)
         rows.append([InlineKeyboardButton(f'🎞 {label}',callback_data=f'v51_prep_edit|{chapter}|{prep_no}',style='primary')])
-    rows += [[_v51_neutral_button('◀️ الفصول',callback_data='v51_prep_chapters'),back_menu()]]
-    await query.edit_message_text(bold(f'📘 محاضرات الفصل {chapter}\n{DIV}\nاختر مجموعة المحاضرات التي تريد تعديلها:'),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup(rows))
+    rows += [[_v51_neutral_button('◀️ الأبواب',callback_data='v51_prep_chapters'),back_menu()]]
+    await query.edit_message_text(bold(f'📘 محاضرات الباب {chapter}\n{DIV}\nاختر مجموعة المحاضرات التي تريد تعديلها:'),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup(rows))
 
 
 async def _v51_require_student(query):
@@ -6453,8 +6474,8 @@ async def button_handler(update,context):
         if data.startswith('v51_review_chapter|'):
             if not await _v51_require_student(query): return
             try: chapter=int(data.split('|')[1])
-            except (ValueError,IndexError): await query.answer('الفصل غير صحيح.',show_alert=True); return
-            if chapter not in range(1,8): await query.answer('الفصل غير صحيح.',show_alert=True); return
+            except (ValueError,IndexError): await query.answer('الباب غير صحيح.',show_alert=True); return
+            if chapter not in range(1,6): await query.answer('الباب غير صحيح.',show_alert=True); return
             await query.answer(); await v51_review_chapter(query,chapter); return
         if data=='v51_review_goal':
             if not await _v51_require_student(query): return
@@ -6493,8 +6514,8 @@ async def button_handler(update,context):
         if data.startswith('v51_prep_chapter|'):
             if not is_admin(uid): await query.answer('للإدارة فقط.',show_alert=True); return
             try: chapter=int(data.split('|')[1])
-            except (ValueError,IndexError): await query.answer('الفصل غير صحيح.',show_alert=True); return
-            if chapter not in range(1,8): await query.answer('الفصل غير صحيح.',show_alert=True); return
+            except (ValueError,IndexError): await query.answer('الباب غير صحيح.',show_alert=True); return
+            if chapter not in range(1,6): await query.answer('الباب غير صحيح.',show_alert=True); return
             await query.answer(); await v51_preparation_chapter(query,chapter); return
         if data.startswith('v51_prep_edit|'):
             if not is_admin(uid): await query.answer('للإدارة فقط.',show_alert=True); return
@@ -6506,7 +6527,7 @@ async def button_handler(update,context):
             current='، '.join(map(str,groups[prep_no-1]))
             await query.answer()
             await query.edit_message_text(bold(
-                f'✏️ تعديل مجموعة محاضرات الفصل {chapter}\n{DIV}\n'
+                f'✏️ تعديل مجموعة محاضرات الباب {chapter}\n{DIV}\n'
                 f'المحاضرات الحالية: {current}\n\nأرسل أرقام المحاضرات الجديدة برسالة واحدة، مثال:\n4, 5'),
                 parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup([
                     [_v51_neutral_button('❌ إلغاء',callback_data=f'v51_prep_chapter|{chapter}')],
@@ -6538,12 +6559,12 @@ async def private_messages(update,context):
         CHAPTER_PREPARATION_DISTRIBUTION[chapter][prep_no-1]=list(result['lectures'])
         context.user_data.pop('v51_edit_prep',None)
         await update.effective_message.reply_text(bold(
-            f"✅ تم تعديل مجموعة المحاضرات فعليا\n{DIV}\n📘 الفصل {chapter}\n"
+            f"✅ تم تعديل مجموعة المحاضرات فعليا\n{DIV}\n📘 الباب {chapter}\n"
             f"🎬 المحاضرات الجديدة: {', '.join(map(str,result['lectures']))}\n"
             f"🗓 صفوف الدورة المحدثة: {result['course_rows']}\n"
             f"👥 جداول الطلاب الحالية والقادمة: {result['personal_rows']}"),
             parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton(f'◀️ محاضرات الفصل {chapter}',callback_data=f'v51_prep_chapter|{chapter}',style='primary')],
+                [InlineKeyboardButton(f'◀️ محاضرات الباب {chapter}',callback_data=f'v51_prep_chapter|{chapter}',style='primary')],
                 [back_menu()]])); return
     return await _v51_previous_private_messages(update,context)
 
@@ -6610,25 +6631,25 @@ def main_menu(admin=False):
 async def v51_exams_menu(query):
     rows=[
         [InlineKeyboardButton('📝 امتحاناتي الحالية',callback_data='tasks|exam|normal',style='primary')],
-        [InlineKeyboardButton('📚 امتحانات الفصول والمحاضرات',callback_data='v42_exam_bank',style='primary')],
+        [InlineKeyboardButton('📚 امتحانات الأبواب والمحاضرات',callback_data='v42_exam_bank',style='primary')],
         [InlineKeyboardButton('🏆 امتحانات تراكمي',callback_data='tasks|exam|cumulative',style='primary')]]
     if await db.v54_school_review_access(query.from_user.id):
         rows.append([InlineKeyboardButton('🏫 امتحانات مراجعة المدرسة',callback_data='v54_school_exams',style='success')])
     rows.append([back_menu()]); kb=InlineKeyboardMarkup(rows)
     await query.edit_message_text(bold(
         f'📝 الامتحانات\n{DIV}\n'
-        'امتحانات الفصول مرتبة حسب المحاضرات التي أكملتها.\n'
+        'امتحانات الأبواب مرتبة حسب المحاضرات التي أكملتها.\n'
         'يمكن أن يجمع الامتحان محاضرة واحدة أو عدة محاضرات، ويفتح بعد موافقة ولي الأمر.'),
         parse_mode=ParseMode.HTML,reply_markup=kb)
 
 
 async def v52_exam_bank(query):
-    rows=[[InlineKeyboardButton(f'📘 الفصل {chapter}',callback_data=f'v52_exam_chapter|{chapter}',style='primary')]
-          for chapter in range(1,8)]
+    rows=[[InlineKeyboardButton(f'📘 الباب {chapter}',callback_data=f'v52_exam_chapter|{chapter}',style='primary')]
+          for chapter in range(1,6)]
     rows += [[InlineKeyboardButton('◀️ الامتحانات',callback_data='exams_menu',style='primary'),back_menu()]]
     await query.edit_message_text(bold(
-        f'📚 امتحانات الفصول والمحاضرات\n{DIV}\n'
-        'اختر الفصل، ثم المحاضرة التي أكملتها. لا توجد خانة منفصلة للامتحانات السابقة.'),
+        f'📚 امتحانات الأبواب والمحاضرات\n{DIV}\n'
+        'اختر الباب، ثم المحاضرة التي أكملتها. لا توجد خانة منوحدةة للامتحانات السابقة.'),
         parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup(rows))
 
 
@@ -6637,23 +6658,23 @@ async def v52_exam_chapter(query,chapter):
     completed=set(bundle.get('completed') or set()); exams=bundle.get('exams') or []
     lecture_ids=[int(item[0]) for item in PLAYLISTS.get(int(chapter),[])]
     rows=[]
-    for start in range(0,len(lecture_ids),4):
+    for start in range(0,len(lecture_ids),2):
         line=[]
-        for lecture in lecture_ids[start:start+4]:
+        for lecture in lecture_ids[start:start+2]:
             count=sum((int(chapter),lecture) in set(map(tuple,exam.get('required') or [])) for exam in exams)
             ready=lecture in completed
             mark='✅' if ready else '🔒'
             suffix=f' • {count} امتحان' if count else ''
             callback=(f'v52_exam_lecture|{chapter}|{lecture}' if ready
                       else f'v55_exam_study|{chapter}|{lecture}')
-            line.append(InlineKeyboardButton(f'{mark} {lecture}',callback_data=callback,
+            line.append(InlineKeyboardButton(f'{mark} المحاضرة {lecture}{suffix}',callback_data=callback,
                 style='success' if ready and count else 'primary'))
         rows.append(line)
-    rows += [[InlineKeyboardButton('◀️ الفصول',callback_data='v42_exam_bank',style='primary'),back_menu()]]
+    rows += [[InlineKeyboardButton('◀️ الأبواب',callback_data='v42_exam_bank',style='primary'),back_menu()]]
     await query.edit_message_text(bold(
-        f'📘 الفصل {chapter}\n{DIV}\n'
+        f'📘 الباب {chapter}\n{DIV}\n'
         '✅ المحاضرة المكتملة يمكن فتح امتحاناتها.\n'
-        '🔒 اضغط المحاضرة غير المكتملة لتفعيلها بالمشاهدة أو بقسم الدراسة.'),parse_mode=ParseMode.HTML,
+        '🔒 اضغط المحاضرة غير المكتملة لتفعيلها بدراسة الملزمة أو بقسم الدراسة.'),parse_mode=ParseMode.HTML,
         reply_markup=InlineKeyboardMarkup(rows))
 
 
@@ -6668,7 +6689,7 @@ async def v52_exam_lecture(query,chapter,lecture):
     rows=[]
     for exam in exams:
         task=exam.get('task') or {}; required=exam.get('required') or []
-        lectures='+'.join(str(number) for ch,number in sorted(required) if int(ch)==int(chapter))
+        lectures=' + '.join(f'م{number}' for ch,number in required if int(ch)==int(chapter))
         if task.get('submitted_at'):
             mark='✅'; state='تم التسليم'; callback='v52_exam_submitted'
         elif not exam.get('ready'):
@@ -6684,14 +6705,14 @@ async def v52_exam_lecture(query,chapter,lecture):
         message='لا يوجد امتحان مربوط بهذه المحاضرة حاليا.'
     else:
         message='إذا كان الامتحان مدمجا، يجب إكمال جميع محاضراته قبل طلب موافقة ولي الأمر.'
-    rows += [[InlineKeyboardButton(f'◀️ محاضرات الفصل {chapter}',callback_data=f'v52_exam_chapter|{chapter}',style='primary'),back_menu()]]
-    await query.edit_message_text(bold(f'📝 الفصل {chapter} | المحاضرة {lecture}\n{DIV}\n{message}'),
+    rows += [[InlineKeyboardButton(f'◀️ محاضرات الباب {chapter}',callback_data=f'v52_exam_chapter|{chapter}',style='primary'),back_menu()]]
+    await query.edit_message_text(bold(f'📝 الباب {chapter} | المحاضرة {lecture}\n{DIV}\n{message}'),
         parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup(rows))
 
 
 async def v52_open_exam(query,context,definition_id):
     student=await get_student(query.from_user.id)
-    if not student or (not student.get('parent_chat_id') and not student.get('admin_manual_active')):
+    if not student or not student.get('parent_chat_id'):
         await query.answer('يجب ربط ولي الأمر أولا.',show_alert=True); return
     result=await db.v52_prepare_chapter_exam(definition_id,query.from_user.id)
     if result.get('status')=='locked':
@@ -6703,24 +6724,20 @@ async def v52_open_exam(query,context,definition_id):
         await query.answer('تم تسليم هذا الامتحان مسبقا.',show_alert=True); return
     if result.get('status')=='open':
         await query.answer(); await show_task(query,context,task['id']); return
-    destination=student.get('parent_chat_id') or OWNER_CHAT_ID or next(iter(sorted(ADMIN_IDS)),0)
-    if not destination:
-        await query.answer('لم تضبط وجهة موافقات الإدارة. راجع الأستاذ.',show_alert=True); return
-    approver='ولي الأمر' if student.get('parent_chat_id') else 'الإدارة'
     await request_exam_access(task['id'],query.from_user.id)
     if result.get('notify'):
         kb=InlineKeyboardMarkup([[
             InlineKeyboardButton('✅ موافق، فتح الامتحان',callback_data=f"examallow|{task['id']}|{query.from_user.id}",style='success'),
             InlineKeyboardButton('❌ رفض',callback_data=f"examdeny|{task['id']}|{query.from_user.id}",style='danger')]])
         try:
-            await context.bot.send_message(destination,bold(
+            await context.bot.send_message(student['parent_chat_id'],bold(
                 f"📝 طلب فتح امتحان\n{DIV}\n👤 الطالب: {student['full_name']}\n📌 {task['title']}\n\n"
                 'لا يفتح الامتحان إلا بعد موافقتكم.'),parse_mode=ParseMode.HTML,reply_markup=kb)
         except TelegramError:
-            await query.answer(f'تعذر إرسال الطلب إلى {approver}. راجع الأستاذ.',show_alert=True); return
-    await query.answer(f'أرسل طلب الموافقة إلى {approver}.',show_alert=True)
+            await query.answer('تعذر إرسال الطلب إلى ولي الأمر. اطلب منه فتح البوت ثم حاول مجددا.',show_alert=True); return
+    await query.answer('أرسل طلب الموافقة إلى ولي الأمر.',show_alert=True)
     await query.edit_message_text(bold(
-        f"⏳ بانتظار موافقة {approver}\n{DIV}\n📝 {task['title']}\n\n"
+        f"⏳ بانتظار موافقة ولي الأمر\n{DIV}\n📝 {task['title']}\n\n"
         'بعد الموافقة ارجع إلى المحاضرة واضغط الامتحان مرة أخرى.'),
         parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup([[back_menu()]]))
 
@@ -6734,16 +6751,16 @@ async def v51_review_menu(query):
     rows=[]
     for row in due[:30]:
         stamp=row['due_at'].astimezone(TIMEZONE).strftime('%d/%m %H:%M')
-        lines.append(f"🔥 الفصل {row['chapter']} | المحاضرة {row['lecture']} | المراجعة {row['stage']} | {stamp}")
+        lines.append(f"🔥 الباب {row['chapter']} | المحاضرة {row['lecture']} | المراجعة {row['stage']} | {stamp}")
         rows.append([InlineKeyboardButton(
-            f"✅ راجع المحاضرة {row['lecture']} — الفصل {row['chapter']}",
+            f"✅ راجع المحاضرة {row['lecture']} — الباب {row['chapter']}",
             callback_data=f"royal_review|{row['id']}",style='success')])
     if not due:
         upcoming=data.get('next')
         if upcoming:
             stamp=upcoming['due_at'].astimezone(TIMEZONE).strftime('%d/%m/%Y %H:%M')
             lines += ['🌟 لا توجد مراجعة مستحقة الآن.',
-                f"⏳ القادمة: الفصل {upcoming['chapter']} | المحاضرة {upcoming['lecture']} | {stamp}"]
+                f"⏳ القادمة: الباب {upcoming['chapter']} | المحاضرة {upcoming['lecture']} | {stamp}"]
         else:
             lines += ['🌟 لا توجد مراجعات مستحقة.',
                 'بعد إكمال أي محاضرة ينشئ البوت مواعيد مراجعاتها الأربع تلقائيا.']
@@ -6759,18 +6776,18 @@ async def v52_progress_overview(query):
         await query.edit_message_text('أكمل تسجيل حسابك أولا.',reply_markup=InlineKeyboardMarkup([[back_menu()]])); return
     completed=data.get('completed') or {}; lines=['📅 متى ننهي المنهج؟',DIV]
     overall_done=0; overall_total=0
-    for chapter in range(1,8):
+    for chapter in range(1,6):
         valid=[int(item[0]) for item in PLAYLISTS.get(chapter,[])]
         done=sorted(set(completed.get(chapter,[])).intersection(valid))
         overall_done+=len(done); overall_total+=len(valid)
         percent=round((len(done)/len(valid))*100) if valid else 0
-        lines += ['',f'📘 الفصل {chapter} — {percent}%',
+        lines += ['',f'📘 الباب {chapter} — {percent}%',
             '✅ المحاضرات المكتملة: '+('، '.join(map(str,done)) if done else 'لا توجد'),
             f'📊 الإنجاز: {len(done)}/{len(valid)}']
     overall=round((overall_done/overall_total)*100) if overall_total else 0
     finish=data.get('finish_date')
     finish_text=finish.strftime('%d/%m/%Y') if finish else 'تم إكمال المسار الحالي'
-    lines += ['',DIV,f'🎯 الإنجاز الكلي: {overall}%',f'🏁 موعد الإكمال المتوقع: {finish_text}',
+    lines += ['',DIV,f'🎯 الإنجاز الكلي: {overall}%',f'🏁 موعد إكمال الخطة الحالية المتوقع: {finish_text}',
         'يتحدث الموعد تلقائيا عند إكمال المحاضرات التالية قبل وقتها.']
     kb=InlineKeyboardMarkup([
         [InlineKeyboardButton('🔄 تحديث التقدم والموعد',callback_data='chapter_completion_schedule',style='primary')],
@@ -6797,8 +6814,7 @@ async def v51_today_preparation(query):
     else:
         chapter=int(prep['chapter']); pending=list(prep.get('pending_lectures') or [])
         all_lectures=sorted(set(pending+list(prep.get('completed_lectures') or [])))
-        lines += ([prep['title']] if prep.get('title') else [])
-        lines += [f'📘 الفصل {chapter}',
+        lines += [f'📘 الباب {chapter}',
             '🎞 المحاضرات: '+(' + '.join(map(str,all_lectures)) or '-')]
         if prep.get('early'):
             lines += ['⚡ دراسة مبكرة قبل الموعد','⭐ المكافأة عند إكمال المجموعة: 30 XP']
@@ -6831,9 +6847,9 @@ async def v52_unlock_next(query):
     row=result['row']; lectures=' + '.join(str(value) for value in str(row['lectures']).split(',') if value.strip())
     await query.answer('تم فتح المحاضرات التالية مع XP مضاعف.',show_alert=True)
     await query.edit_message_text(bold(
-        f"⚡ فُتحت المحاضرات التالية\n{DIV}\n📘 الفصل {row['chapter']}\n🎞 المحاضرات: {lectures}\n"
+        f"⚡ فُتحت المحاضرات التالية\n{DIV}\n📘 الباب {row['chapter']}\n🎞 المحاضرات: {lectures}\n"
         '⭐ تحصل على 30 XP بعد إكمالها بالكامل.\n'
-        '📅 يتحدث تقدمك وموعد إكمال المنهج تلقائيا.'),parse_mode=ParseMode.HTML,
+        '📅 يتحدث تقدمك وموعد إكمال الخطة الحالية تلقائيا.'),parse_mode=ParseMode.HTML,
         reply_markup=InlineKeyboardMarkup([
             [InlineKeyboardButton('▶️ فتح المحاضرات الآن',callback_data='today_prep',style='success')],
             [back_menu()]]))
@@ -6844,11 +6860,15 @@ async def _v52_complete_lecture(query,context,chapter,lecture):
     progress=await lecture_progress(uid,chapter,lecture)
     if progress and progress.get('completed_at'):
         await query.answer('تم تسجيل هذه المحاضرة مسبقا.',show_alert=True); return
-    allowed=await db.lecture_opened_in_assigned_preparation(uid,chapter,lecture)
+    current=await db.v52_current_preparation(uid)
+    allowed=bool(current and int(current['chapter'])==int(chapter) and int(lecture) in
+        set((current.get('pending_lectures') or [])+(current.get('completed_lectures') or [])))
+    if not allowed:
+        allowed=await db.lecture_opened_in_assigned_preparation(uid,chapter,lecture)
     if not allowed:
         await query.answer('هذه المحاضرة ليست ضمن محاضراتك الحالية.',show_alert=True); return
     if not progress or not progress.get('opened_at'):
-        await query.answer('افتح المحاضرة أولا ثم ارجع بعد مشاهدتها.',show_alert=True); return
+        await query.answer('افتح المحاضرة أولا ثم ارجع بعد دراستها.',show_alert=True); return
     elapsed=(datetime.now(progress['opened_at'].tzinfo)-progress['opened_at']).total_seconds()
     required=MIN_LECTURE_WATCH_MINUTES*60
     if elapsed<required:
@@ -6859,7 +6879,7 @@ async def _v52_complete_lecture(query,context,chapter,lecture):
     backlog_done=await complete_backlog(uid,chapter,lecture)
     award=await award_daily_preparation(uid,chapter,lecture)
     xp=int((award or {}).get('xp') or 0)
-    lines=[f'✅ تم تسجيل إكمال الفصل {chapter} — المحاضرة {lecture}.']
+    lines=[f'✅ تم تسجيل إكمال الباب {chapter} — المحاضرة {lecture}.']
     if xp: lines.append(f'⭐ حصلت على {xp} XP'+(' مضاعفة للدراسة المبكرة.' if (award or {}).get('early') else '.'))
     lines += ['📝 إذا اكتملت محاضرات امتحان مرتبط بها، سيظهر لك ويحتاج موافقة ولي الأمر قبل الفتح.']
     rows=[[InlineKeyboardButton('🎬 متابعة محاضراتي',callback_data='today_prep',style='success')],
@@ -6868,7 +6888,7 @@ async def _v52_complete_lecture(query,context,chapter,lecture):
     await query.edit_message_text(bold('\n'.join(lines)),parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup(rows))
     for parent in await student_parents(uid,True):
         try: await context.bot.send_message(parent['parent_chat_id'],bold(
-            f"🌟 إنجاز دراسي جديد\nأكمل الطالب {student['full_name']} المحاضرة {lecture} من الفصل {chapter}."),parse_mode=ParseMode.HTML)
+            f"🌟 إنجاز دراسي جديد\nأكمل الطالب {student['full_name']} المحاضرة {lecture} من الباب {chapter}."),parse_mode=ParseMode.HTML)
         except TelegramError: pass
 
 
@@ -6928,11 +6948,13 @@ async def v51_daily_tasks_menu(query):
     tasks=bundle.get('tasks') or []; exams=[row for row in tasks if row.get('kind')=='exam']
     homework=[row for row in tasks if row.get('kind')=='homework']; reviews=bundle.get('reviews') or []
     lines=['✅ مهامي اليومية',DIV]; rows=[]; total=0
-    if prep and prep.get('pending_lectures'):
+    lectures_enabled=await db.section_enabled(query.from_user.id,'lectures') if hasattr(db,'section_enabled') else True
+    if not lectures_enabled:
+        pass
+    elif prep and prep.get('pending_lectures'):
         lectures=' + '.join(str(number) for number in prep['pending_lectures'])
         early=' — دراسة مبكرة' if prep.get('early') else ''
-        if prep.get('title'):lines.append(prep['title'])
-        lines.append(f"🎬 محاضراتك: الفصل {prep['chapter']} | {lectures}{early}"); total+=len(prep['pending_lectures'])
+        lines.append(f"🎬 محاضراتك: الباب {prep['chapter']} | {lectures}{early}"); total+=len(prep['pending_lectures'])
         rows.append([InlineKeyboardButton('🎬 فتح محاضراتي',callback_data='today_prep',style='success')])
     elif prep:
         lines.append('✅ المحاضرات الحالية مكتملة')
@@ -6970,23 +6992,23 @@ async def v53_admin_exam_chapters(query,context,course=False,cumulative=False,re
     state['step']='select_lectures'; state['selected_preps']=[]
     selected={tuple(item) for item in state.get('selected_lectures',[])}
     rows=[]
-    for start in range(1,8,2):
+    for start in range(1,6,2):
         line=[]
-        for chapter in range(start,min(start+2,8)):
+        for chapter in range(start,min(start+2,6)):
             count=sum(1 for ch,_ in selected if int(ch)==chapter)
             suffix=f' ({count})' if count else ''
-            line.append(InlineKeyboardButton(f'📘 الفصل {chapter}{suffix}',
+            line.append(InlineKeyboardButton(f'📘 الباب {chapter}{suffix}',
                 callback_data=f'v53_admin_exam_chapter|{chapter}',style='primary'))
         rows.append(line)
     if selected:
         rows.append([InlineKeyboardButton(f'✅ متابعة بالمحاضرات المختارة ({len(selected)})',
             callback_data='v53_admin_exam_done',style='success')])
     rows.append([InlineKeyboardButton('❌ إلغاء النشر',callback_data='linkedexamcancel',style='danger'),back_menu()])
-    exam_name='الامتحان التراكمي للدورة' if state.get('cumulative') else ('امتحان الدورة الحالية' if state.get('audience')=='course' else 'امتحان طلاب الفصول')
+    exam_name='الامتحان التراكمي للدورة' if state.get('cumulative') else ('امتحان الدورة الحالية' if state.get('audience')=='course' else 'امتحان طلاب الأبواب')
     target=('👥 الفئة: طلاب الدورة الحالية فقط' if state.get('audience')=='course'
-        else '📘 الفئة: طلاب الدراسة حسب الفصول فقط')
+        else '📘 الفئة: طلاب الدراسة حسب الأبواب فقط')
     await query.edit_message_text(bold(
-        f'📝 نشر {exam_name}\n{DIV}\n{target}\n\nاختر الفصل، ثم حدد المحاضرة أو المحاضرات الداخلة في الامتحان مباشرة.\n\n'
+        f'📝 نشر {exam_name}\n{DIV}\n{target}\n\nاختر الباب، ثم حدد المحاضرة أو المحاضرات الداخلة في الامتحان مباشرة.\n\n'
         'لن تظهر أرقام التحاضير في هذا المسار.'),parse_mode=ParseMode.HTML,
         reply_markup=InlineKeyboardMarkup(rows))
 
@@ -7014,11 +7036,11 @@ async def v53_admin_exam_lecture_picker(query,context,chapter):
     if selected:
         rows.append([InlineKeyboardButton(f'✅ إنهاء الاختيار ({len(selected)})',
             callback_data='v53_admin_exam_done',style='success')])
-    rows.append([InlineKeyboardButton('◀️ الفصول',callback_data='v53_admin_exam_chapters',style='primary'),back_menu()])
+    rows.append([InlineKeyboardButton('◀️ الأبواب',callback_data='v53_admin_exam_chapters',style='primary'),back_menu()])
     chosen_here=', '.join(str(lecture) for ch,lecture in sorted(selected) if int(ch)==chapter) or 'لا توجد'
-    target=('طلاب الدورة الحالية فقط' if state.get('audience')=='course' else 'طلاب الدراسة حسب الفصول فقط')
+    target=('طلاب الدورة الحالية فقط' if state.get('audience')=='course' else 'طلاب الدراسة حسب الأبواب فقط')
     await query.edit_message_text(bold(
-        f'📘 الفصل {chapter}\n{DIV}\n🎯 المسار: {target}\n\nاختر المحاضرات الداخلة في الامتحان.\n\n✅ المختارة من هذا الفصل: {chosen_here}'),
+        f'📘 الباب {chapter}\n{DIV}\n🎯 المسار: {target}\n\nاختر المحاضرات الداخلة في الامتحان.\n\n✅ المختارة من هذا الباب: {chosen_here}'),
         parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup(rows))
 
 
@@ -7031,14 +7053,15 @@ async def button_handler(update,context):
         context.user_data.pop('linked_exam',None)
         kb=InlineKeyboardMarkup([
             [InlineKeyboardButton('📚 نشر وإدارة الواجبات',callback_data='hw|list|0',style='primary')],
+            [InlineKeyboardButton('📖 إدارة الملازم والملخصات',callback_data='respub|menu',style='primary')],
             [InlineKeyboardButton('👥 امتحان طلاب الدورة الحالية',callback_data='v53_course_exam_start',style='success')],
-            [InlineKeyboardButton('📘 امتحان طلاب الدراسة حسب الفصول',callback_data='v53_chapter_exam_start',style='primary')],
+            [InlineKeyboardButton('📘 امتحان طلاب الدراسة حسب الأبواب',callback_data='v53_chapter_exam_start',style='primary')],
             [InlineKeyboardButton('🏆 تراكمي طلاب الدورة الحالية',callback_data='v53_course_cumulative_start',style='primary')],
             [InlineKeyboardButton('🗓 عرض المنشورات المجدولة',callback_data='scheduled_list',style='primary')],
             [back_menu()]])
         await query.answer(); await query.edit_message_text(bold(
             f'➕ نشر جديد — {BUILD_VERSION}\n{DIV}\n'
-            'جميع أنواع الامتحانات أدناه تعتمد اختيار الفصل ثم المحاضرات مباشرة.\n'
+            'جميع أنواع الامتحانات أدناه تعتمد اختيار الباب ثم المحاضرات مباشرة.\n'
             'لا يوجد اختيار حسب التحاضير.'),parse_mode=ParseMode.HTML,reply_markup=kb); return
     if data in {'v53_course_exam_start','v53_chapter_exam_start','v53_course_cumulative_start'}:
         if not is_admin(uid): await query.answer('هذا القسم للإدارة فقط.',show_alert=True); return
@@ -7218,7 +7241,7 @@ async def private_messages(update,context):
         await linked_exam_dispatch_job(context)
         await complete_backlog(uid,chapter,lecture)
         award=await award_daily_preparation(uid,chapter,lecture); xp=int((award or {}).get('xp') or 0)
-        lines=[f'✅ تم تسجيل دراسة الفصل {chapter} — المحاضرة {lecture} من مصدرك الخاص.']
+        lines=[f'✅ تم تسجيل دراسة الباب {chapter} — المحاضرة {lecture} من مصدرك الخاص.']
         if xp: lines.append(f'⭐ حصلت على {xp} XP'+(' مضاعفة للدراسة المبكرة.' if (award or {}).get('early') else '.'))
         lines.append('📝 الامتحان المرتبط يظهر بعد اكتمال محاضراته ويحتاج موافقة ولي الأمر قبل فتحه.')
         kb=InlineKeyboardMarkup([
@@ -7229,7 +7252,7 @@ async def private_messages(update,context):
         student=await get_student(uid)
         for parent in await student_parents(uid,True):
             try: await context.bot.send_message(parent['parent_chat_id'],bold(
-                f"🌟 إنجاز دراسي جديد\nأكمل الطالب {student['full_name']} المحاضرة {lecture} من الفصل {chapter} من مصدره الخاص."),parse_mode=ParseMode.HTML)
+                f"🌟 إنجاز دراسي جديد\nأكمل الطالب {student['full_name']} المحاضرة {lecture} من الباب {chapter} من مصدره الخاص."),parse_mode=ParseMode.HTML)
             except TelegramError: pass
         return
     task_id=context.user_data.get('waiting_submission')
@@ -7344,14 +7367,8 @@ async def v54_school_review_exams(query):
     rows=[]
     for review in catalog:
         if not review.get('published_at') and review['exam_date']>today: continue
-        if review.get('source_type')=='pdf' and review.get('exam_deleted'): continue
-        pdf_closed=(review.get('source_type')=='pdf' and
-                    (review.get('exam_manual_closed') or
-                     (review.get('exam_closes_at') and review['exam_closes_at']<=datetime.now(TIMEZONE))))
         if review.get('submitted_at'):
             mark,state,callback='✅','تم التسليم','v54_school_done'
-        elif not review.get('completed_at') and pdf_closed:
-            mark,state,callback='🔒','انتهى موعد الامتحان',f"v54_school_review_open|{review['id']}"
         elif not review.get('completed_at'):
             mark,state,callback='🔒','أكمل المراجعة أولا',f"v54_school_review_open|{review['id']}"
         elif (review.get('exam_opens_at') and review['exam_opens_at']>datetime.now(TIMEZONE)) or (not review.get('exam_opens_at') and review['exam_date']>today):
@@ -7379,10 +7396,11 @@ async def v54_school_admin_menu(query):
     kb=InlineKeyboardMarkup([
         [InlineKeyboardButton('👥 تفعيل الطلاب المحددين',callback_data='v54_school_students|0',style='success')],
         [InlineKeyboardButton('🗓 الأسابيع وأسئلة الامتحانات',callback_data='v54_school_catalog',style='primary')],
+        [InlineKeyboardButton('➕ إضافة أسبوع مراجعة',callback_data='v54_school_add',style='success')],
         [back_menu()]])
     await query.edit_message_text(bold(
         f'🏫 إدارة مراجعة المدرسة\n{DIV}\n'
-        f'👥 الطلاب المفعلون: {enabled}\n📝 امتحانات مضافة: {ready} من 12\n\n'
+        f'👥 الطلاب المفعلون: {enabled}\n📝 امتحانات مضافة: {ready} من {len(catalog)}\n\n'
         'الميزة لا تعمل إلا لطلاب الدورة الحالية الذين تفعلهم من هنا.'),
         parse_mode=ParseMode.HTML,reply_markup=kb)
 
@@ -7447,7 +7465,7 @@ async def _v54_notify_parent_exam(context,user_id,task,review):
             await context.bot.send_message(parent_id,bold(
                 f"🏫 طلب امتحان مراجعة المدرسة\n{DIV}\n👤 الطالب: {student['full_name']}\n"
                 f"✦ الأسبوع {review['week_label']} ✦\n📚 {review['topics']}\n\n"
-                'أكمل الطالب المراجعة. وافق لفتح الامتحان ضمن الموعد المحدد من الإدارة.'),
+                'أكمل الطالب المراجعة. وافق لفتح الامتحان لمدة 24 ساعة.'),
                 parse_mode=ParseMode.HTML,reply_markup=kb); sent=True
         except TelegramError: pass
     if not sent and OWNER_CHAT_ID:
@@ -7463,9 +7481,9 @@ async def _v54_notify_parent_exam(context,user_id,task,review):
 
 async def v54_school_review_job(context):
     for review in await db.v54_due_school_review_publications():
-        if not CHEMISTRY_GROUP_ID: break
+        if not ARABIC_GROUP_ID: break
         try:
-            sent=await context.bot.send_message(CHEMISTRY_GROUP_ID,bold(_v54_school_review_text(review)),
+            sent=await context.bot.send_message(ARABIC_GROUP_ID,bold(_v54_school_review_text(review)),
                 parse_mode=ParseMode.HTML,message_thread_id=SCHOOL_REVIEW_TOPIC_ID or None)
         except TelegramError:
             logger.exception('Could not publish school review %s',review['id']); continue
@@ -7510,6 +7528,7 @@ async def button_handler(update,context):
     if data=='menu':
         context.user_data.pop('v54_school_exam_media',None)
         context.user_data.pop('awaiting_school_review_oath',None)
+        context.user_data.pop('v54_school_review_add',None)
     if data=='v54_school_review':
         await v54_school_review_menu(query); return
     if data.startswith('v54_school_review_open|'):
@@ -7559,6 +7578,12 @@ async def button_handler(update,context):
     if data=='v54_school_catalog':
         if not is_admin(uid): await query.answer('للإدارة فقط.',show_alert=True); return
         await query.answer(); await v54_school_admin_catalog(query); return
+    if data=='v54_school_add':
+        if not is_admin(uid): await query.answer('للإدارة فقط.',show_alert=True); return
+        context.user_data['v54_school_review_add']={'step':'week_no','started_at':datetime.now(TIMEZONE)}
+        await query.answer(); await query.edit_message_text(bold(
+            '➕ إضافة أسبوع مراجعة\n━━━━━━━━━━━━━━━━━━\nأرسل رقم الأسبوع، مثال: 9'),
+            parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup([[back_menu()]])); return
     if data.startswith('v54_school_admin_review|'):
         if not is_admin(uid): await query.answer('للإدارة فقط.',show_alert=True); return
         await query.answer(); await v54_school_admin_review(query,int(data.split('|')[1])); return
@@ -7587,6 +7612,41 @@ async def button_handler(update,context):
 _v54_previous_private_messages=private_messages
 async def private_messages(update,context):
     uid=update.effective_user.id; msg=update.effective_message
+    add_state=context.user_data.get('v54_school_review_add')
+    if add_state and is_admin(uid):
+        if datetime.now(TIMEZONE)-add_state.get('started_at',datetime.now(TIMEZONE))>timedelta(minutes=30):
+            context.user_data.pop('v54_school_review_add',None)
+            await msg.reply_text('انتهت مهلة الإضافة. ابدأ من لوحة مراجعة المدرسة من جديد.'); return
+        value=(msg.text or '').strip(); step=add_state.get('step')
+        if not value:
+            await msg.reply_text('أرسل نصا صحيحا لإكمال الإضافة.'); return
+        if step=='week_no':
+            if not value.isdigit() or not 1<=int(value)<=60:
+                await msg.reply_text('أرسل رقم أسبوع من 1 إلى 60.'); return
+            add_state['week_no']=int(value); add_state['step']='chapter_label'
+            await msg.reply_text('📘 أرسل اسم الباب، مثال: الباب الثالثة'); return
+        if step=='chapter_label':
+            add_state['chapter_label']=value; add_state['step']='topics'
+            await msg.reply_text('📚 أرسل الموضوعات الداخلة في المراجعة:'); return
+        if step=='topics':
+            add_state['topics']=value; add_state['step']='exam_date'
+            await msg.reply_text('📅 أرسل موعد الامتحان بصيغة يوم/شهر/سنة، مثال: 02/12/2026\nسينشر البوت المراجعة قبله بـ7 أيام.'); return
+        try:
+            exam_date=datetime.strptime(value,'%d/%m/%Y').date()
+        except ValueError:
+            await msg.reply_text('صيغة التاريخ غير صحيحة. أرسلها مثل: 02/12/2026'); return
+        result=await db.v54_add_school_review(add_state['week_no'],add_state['chapter_label'],add_state['topics'],exam_date,uid)
+        if result['status']=='exists':
+            await msg.reply_text('هذا الأسبوع موجود مسبقا. اختر رقما آخر أو عدّله من الأسابيع الحالية.'); return
+        if result['status']!='ok':
+            await msg.reply_text('تعذر حفظ الأسبوع. راجع المعلومات وحاول مجددا.'); return
+        context.user_data.pop('v54_school_review_add',None); review=result['review']
+        await msg.reply_text(bold(
+            f"✅ تمت إضافة الأسبوع {review['week_label']}\n"
+            f"📢 النشر: {review['publish_date'].strftime('%d/%m/%Y')}\n"
+            f"📝 الامتحان: {review['exam_date'].strftime('%d/%m/%Y')}"),
+            parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton('🗓 عرض الأسابيع',callback_data='v54_school_catalog',style='primary')],[back_menu()]])); return
     media_state=context.user_data.get('v54_school_exam_media')
     if media_state and is_admin(uid):
         if datetime.now(TIMEZONE)-media_state.get('started_at',datetime.now(TIMEZONE))>timedelta(minutes=30):
@@ -7621,8 +7681,6 @@ async def private_messages(update,context):
             sent=await _v54_notify_parent_exam(context,uid,task,review)
             if sent: await db.v54_mark_school_review_exam_notified(review['id'],uid)
             lines.append('🔐 أرسل طلب فتح الامتحان إلى ولي الأمر.')
-        elif review.get('exam_opens_at') and review['exam_opens_at']>datetime.now(TIMEZONE):
-            lines.append(f"⏳ يفتح الامتحان {review['exam_opens_at'].astimezone(TIMEZONE).strftime('%d/%m/%Y %H:%M')}، ثم يطلب موافقة ولي الأمر.")
         elif review['exam_date']>datetime.now(TIMEZONE).date():
             lines.append(f"⏳ يجهز الامتحان بتاريخ {review['exam_date'].strftime('%d/%m/%Y')} ثم يطلب موافقة ولي الأمر.")
         else: lines.append('📭 أسئلة الامتحان لم تضف بعد؛ سيجهزها البوت فور نشرها.')
@@ -7660,12 +7718,12 @@ async def v55_exam_requirements(query,definition_id):
     if not missing:
         chapter,lecture=map(int,exam['required'][0])
         await query.answer(); await v52_exam_lecture(query,chapter,lecture); return
-    rows=[[InlineKeyboardButton(f'📚 إكمال الفصل {chapter} — المحاضرة {lecture}',
+    rows=[[InlineKeyboardButton(f'📚 إكمال الباب {chapter} — المحاضرة {lecture}',
         callback_data=f'v55_exam_study|{chapter}|{lecture}',style='success')] for chapter,lecture in missing]
-    rows += [[InlineKeyboardButton('◀️ امتحانات الفصل',callback_data=f"v52_exam_chapter|{definition['chapter']}",style='primary'),back_menu()]]
+    rows += [[InlineKeyboardButton('◀️ امتحانات الباب',callback_data=f"v52_exam_chapter|{definition['chapter']}",style='primary'),back_menu()]]
     await query.answer(); await query.edit_message_text(bold(
         f"🔒 متطلبات فتح الامتحان\n{DIV}\n📝 {str(definition['title']).replace('[تراكمي] ','')}\n\n"
-        'أكمل المحاضرات الظاهرة أدناه. يمكنك اعتماد كل محاضرة بالمشاهدة أو بقسم الدراسة من مصدر خاص.'),
+        'أكمل المحاضرات الظاهرة أدناه. يمكنك اعتماد كل محاضرة بدراسة الملزمة أو بقسم الدراسة من مصدر خاص.'),
         parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup(rows))
 
 
@@ -7677,11 +7735,11 @@ async def v55_exam_study_menu(query,chapter,lecture):
         await query.answer('هذه المحاضرة مكتملة بالفعل.'); await v52_exam_lecture(query,int(chapter),int(lecture)); return
     item=PLAYLISTS[int(chapter)][int(lecture)-1]
     rows=[
-        [InlineKeyboardButton('▶️ مشاهدتها من رابط البوت',callback_data=f'v55_exam_watch|{chapter}|{lecture}',style='success')],
+        [InlineKeyboardButton('▶️ دراسة صفحات الملزمة',callback_data=f'v55_exam_watch|{chapter}|{lecture}',style='success')],
         [InlineKeyboardButton('📚 درستها من مصدر خاص — القسم',callback_data=f'v55_exam_oath|{chapter}|{lecture}',style='primary')],
-        [InlineKeyboardButton(f'◀️ محاضرات الفصل {chapter}',callback_data=f'v52_exam_chapter|{chapter}',style='primary'),back_menu()]]
+        [InlineKeyboardButton(f'◀️ محاضرات الباب {chapter}',callback_data=f'v52_exam_chapter|{chapter}',style='primary'),back_menu()]]
     await query.answer(); await query.edit_message_text(bold(
-        f"🎬 الفصل {chapter} — المحاضرة {lecture}\n{DIV}\n📌 {item[1]}\n\n"
+        f"🎬 الباب {chapter} — المحاضرة {lecture}\n{DIV}\n📌 {item[1]}\n\n"
         'اختر طريقة إكمال المحاضرة حتى تتفعل امتحاناتها.'),parse_mode=ParseMode.HTML,
         reply_markup=InlineKeyboardMarkup(rows))
 
@@ -7726,9 +7784,9 @@ async def button_handler(update,context):
         if elapsed<MIN_LECTURE_WATCH_MINUTES*60:
             remain=max(1,int((MIN_LECTURE_WATCH_MINUTES*60-elapsed+59)//60))
             await query.answer(f'بقي نحو {remain} دقيقة من وقت التحقق.',show_alert=True); return
-        await query.answer(); await query.edit_message_text(bold('🔍 هل شاهدت المحاضرة كاملة وفهمت أفكارها الأساسية؟'),
+        await query.answer(); await query.edit_message_text(bold('🔍 هل درست الصفحات المطلوبة كاملة وفهمت أفكارها الأساسية؟'),
             parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton('✅ نعم، شاهدتها كاملة',callback_data=f'prepverify|{chapter}|{lecture}',style='success')],
+                InlineKeyboardButton('✅ نعم، درستها كاملة',callback_data=f'prepverify|{chapter}|{lecture}',style='success')],
                 [InlineKeyboardButton('↩️ العودة للمحاضرة',callback_data=f'prepopen|{chapter}|{lecture}',style='primary')]])); return
     if data.startswith('prepverify|') and not is_admin(uid):
         try:
@@ -7747,12 +7805,12 @@ async def button_handler(update,context):
             await query.answer('المحاضرة غير موجودة.',show_alert=True); return
         item=PLAYLISTS[chapter][lecture-1]
         await mark_lecture_progress(uid,chapter,lecture,False,'exam_bank_watch')
-        rows=[[InlineKeyboardButton('▶️ فتح المحاضرة على YouTube',url=item[2],style='success')],
-              [InlineKeyboardButton('✅ أكملت مشاهدة المحاضرة',callback_data=f'v55_exam_verify|{chapter}|{lecture}',style='success')],
+        rows=[[InlineKeyboardButton('▶️ عرض صفحات الملزمة',**page_button_target(item),style='success')],
+              [InlineKeyboardButton('✅ أكملت دراسة الصفحات',callback_data=f'v55_exam_verify|{chapter}|{lecture}',style='success')],
               [InlineKeyboardButton('◀️ طرق الإكمال',callback_data=f'v55_exam_study|{chapter}|{lecture}',style='primary'),back_menu()]]
         await query.answer(); await query.edit_message_text(bold(
-            f"🎬 الفصل {chapter} — المحاضرة {lecture}\n{DIV}\n{item[1]}\n\n"
-            'بعد المشاهدة ارجع واضغط «أكملت مشاهدة المحاضرة».'),parse_mode=ParseMode.HTML,
+            f"🎬 الباب {chapter} — المحاضرة {lecture}\n{DIV}\n{item[1]}\n\n"
+            'بعد الدراسة ارجع واضغط «أكملت دراسة الصفحات».'),parse_mode=ParseMode.HTML,
             reply_markup=InlineKeyboardMarkup(rows)); return
     if data.startswith('v55_exam_verify|'):
         _,chapter_raw,lecture_raw=data.split('|'); chapter,lecture=int(chapter_raw),int(lecture_raw)
@@ -7760,12 +7818,12 @@ async def button_handler(update,context):
         if progress and progress.get('completed_at'):
             await query.answer('هذه المحاضرة مكتملة مسبقا.'); await v52_exam_lecture(query,chapter,lecture); return
         if not progress or not progress.get('opened_at'):
-            await query.answer('افتح رابط المحاضرة أولا.',show_alert=True); return
+            await query.answer('افتح صفحات المحاضرة أولا.',show_alert=True); return
         elapsed=(datetime.now(progress['opened_at'].tzinfo)-progress['opened_at']).total_seconds()
         required=MIN_LECTURE_WATCH_MINUTES*60
         if elapsed<required:
             remain=max(1,int((required-elapsed+59)//60))
-            await query.answer(f'بقي نحو {remain} دقيقة لاعتماد المشاهدة.',show_alert=True); return
+            await query.answer(f'بقي نحو {remain} دقيقة لاعتماد الدراسة.',show_alert=True); return
         await mark_lecture_progress(uid,chapter,lecture,True,'exam_bank_watch')
         await linked_exam_dispatch_job(context); await complete_backlog(uid,chapter,lecture)
         await query.answer('تم اعتماد المحاضرة وتفعيل امتحاناتها المستحقة.',show_alert=True)
@@ -7797,7 +7855,7 @@ async def private_messages(update,context):
         msg=update.effective_message
         if datetime.now(TIMEZONE)-state.get('started_at',datetime.now(TIMEZONE))>timedelta(minutes=30):
             context.user_data.pop('awaiting_exam_bank_oath',None)
-            await msg.reply_text('انتهت مهلة القسم. افتح امتحانات الفصول وحاول من جديد.'); return
+            await msg.reply_text('انتهت مهلة القسم. افتح امتحانات الأبواب وحاول من جديد.'); return
         if (msg.text or '').strip()!=PRIVATE_STUDY_OATH:
             await msg.reply_text(bold('⚠️ أرسل القسم حرفيا بدون تغيير.'),parse_mode=ParseMode.HTML); return
         chapter,lecture=int(state['chapter']),int(state['lecture'])
@@ -7808,53 +7866,163 @@ async def private_messages(update,context):
         await mark_lecture_progress(uid,chapter,lecture,True,'exam_bank_private_oath')
         await linked_exam_dispatch_job(context); await complete_backlog(uid,chapter,lecture)
         await msg.reply_text(bold(
-            f"✅ تم اعتماد الفصل {chapter} — المحاضرة {lecture}.\n📝 تفعلت امتحاناتها المستحقة، والامتحان المدمج يفتح بعد إكمال بقية محاضراته."),
+            f"✅ تم اعتماد الباب {chapter} — المحاضرة {lecture}.\n📝 تفعلت امتحاناتها المستحقة، والامتحان المدمج يفتح بعد إكمال بقية محاضراته."),
             parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup([[
                 InlineKeyboardButton('📝 فتح امتحانات المحاضرة',callback_data=f'v52_exam_lecture|{chapter}|{lecture}',style='success')],[back_menu()]])); return
     return await _v55_previous_private_messages(update,context)
 
 
-from school_exam_upgrade import install as _install_school_exam_upgrade
-_install_school_exam_upgrade(globals(),db,'chemistry')
+async def add_admin_command(update,context):
+    await _manage_admin_command(update,context,True)
 
+
+async def remove_admin_command(update,context):
+    await _manage_admin_command(update,context,False)
+
+
+async def _manage_admin_command(update,context,enabled):
+    message=update.effective_message
+    if update.effective_chat.type!='private' or not can_manage_admins(update.effective_user.id):
+        await message.reply_text('⛔ إضافة وحذف الأدمن متاحان للإدارة الثابتة في Render فقط، داخل الخاص.'); return
+    if len(context.args)!=1 or not context.args[0].isdigit() or not 0<int(context.args[0])<10**16:
+        verb='add_admin' if enabled else 'remove_admin'
+        await message.reply_text(f'أرسل هكذا: /{verb} 123456789'); return
+    target=int(context.args[0])
+    if enabled and (target==OWNER_CHAT_ID or target in FOUNDER_IDS or target in ADMIN_IDS or target in MANUAL_ADMIN_IDS):
+        await message.reply_text(f'ℹ️ الرقم {target} أدمن مسبقاً. خلي الشخص المقصود يرسل /id من حسابه للبوت، واستعمل الرقم الذي يظهر أمام «معرفك».'); return
+    if not enabled and (target==OWNER_CHAT_ID or target in FOUNDER_IDS or target in ADMIN_IDS):
+        await message.reply_text('هذا الحساب ثابت في متغيرات Render. لحذف صلاحيته غيّر الإعداد هناك.'); return
+    try:
+        await db.run(lambda: db.set_manual_admin(target,update.effective_user.id,enabled))
+    except Exception:
+        logger.exception('Manual admin change failed')
+        await message.reply_text('⚠️ تعذر حفظ التغيير بقاعدة البيانات. راجع سجل Render.'); return
+    if enabled: MANUAL_ADMIN_IDS.add(target)
+    else: MANUAL_ADMIN_IDS.discard(target)
+    await message.reply_text(f"{'✅ أضيف الأدمن' if enabled else '✅ أزيل الأدمن'}: {target}. الصلاحية محفوظة حتى بعد إعادة التشغيل. خلي المستخدم يرسل /start.")
+
+
+_manual_admin_previous_button_handler=button_handler
+async def button_handler(update,context):
+    query=update.callback_query
+    if query and query.data=='manual_admin_help':
+        if not can_manage_admins(query.from_user.id):
+            await query.answer('إدارة الأدمن للمسؤولين الثابتين في Render فقط.',show_alert=True); return
+        await query.answer()
+        await query.edit_message_text(bold(
+            '👑 إدارة الأدمن بالمعرّف\n\n'
+            'أرسل للبوت في الخاص:\n/add_admin 123456789\n\n'
+            'لإزالة أدمن أضفته من البوت:\n/remove_admin 123456789\n\n'
+            'يمكنك معرفة المعرّف بالأمر /id من حساب الشخص نفسه. '
+            'بعد الإضافة يرسل الشخص /start.'),parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup([[back_menu()]])); return
+    return await _manual_admin_previous_button_handler(update,context)
+
+
+_manual_admin_previous_post_init=post_init
+async def post_init(app):
+    await _manual_admin_previous_post_init(app)
+    MANUAL_ADMIN_IDS.update(await db.run(db.load_manual_admins))
+    logger.info('Loaded %d manually assigned admins',len(MANUAL_ADMIN_IDS))
+
+
+from school_exam_upgrade import install as _install_school_exam_upgrade
+_install_school_exam_upgrade(globals(),db,'arabic')
+
+from student_submission_topics import StudentTopicRouter, TopicRoutingError
+_submission_topic_router = StudentTopicRouter(db)
+
+from exam_reuse import install as _install_exam_reuse
+_install_exam_reuse(globals(),db)
+from exam_difficulty import install as _install_exam_difficulty, task_is_hard
+_install_exam_difficulty(globals(),db)
 from admin_student_access import install as _install_admin_student_access
 _install_admin_student_access(globals(),db)
-
 from student_experience import install as _install_student_experience
 _install_student_experience(globals(),db)
-
 from education_update import install as _install_education_update
 _install_education_update(globals(),db)
-
 from admin_control import install as _install_admin_control
 _install_admin_control(globals(),db)
-
 from homework_management import install as _install_homework_management
-_install_homework_management(globals(),db,'chemistry')
-
+_install_homework_management(globals(),db,'arabic')
 from prior_learning import install as _install_prior_learning
-_install_prior_learning(globals(),db,'chemistry')
-
+_install_prior_learning(globals(),db,'arabic')
 from school_pdf_reviews import install as _install_school_pdf_reviews
-_install_school_pdf_reviews(globals(),db,'chemistry')
+_install_school_pdf_reviews(globals(),db,'arabic')
 
 from resource_publishing import install as _install_resource_publishing
-_install_resource_publishing(globals(),db,'chemistry')
+_install_resource_publishing(globals(),db,'arabic')
 
-from chemistry_precision_v6 import install as _install_chemistry_precision_v6
-_install_chemistry_precision_v6(globals(),db)
+
+from arabic_precision_v6 import install as _install_arabic_precision_v6
+_install_arabic_precision_v6(globals(),db)
 
 from admin_ui_v7 import install as _install_admin_ui_v7
-_install_admin_ui_v7(globals(),db,'chemistry')
+_install_admin_ui_v7(globals(),db,'arabic')
 
 from admin_ui_v8 import install as _install_admin_ui_v8
-_install_admin_ui_v8(globals(),db,'chemistry')
+_install_admin_ui_v8(globals(),db,'arabic')
 
 from admin_v9_last_additions import install as _install_admin_v9_last_additions
-_install_admin_v9_last_additions(globals(),db,'chemistry')
+_install_admin_v9_last_additions(globals(),db,'arabic')
 
 from start_role_routing import install as _install_start_role_routing
-_install_start_role_routing(globals(), db, 'chemistry')
+_install_start_role_routing(globals(), db, 'arabic')
 
+async def v11_input_dispatch(update,context):
+    if await v11_input_message(update,context):
+        raise ApplicationHandlerStop
+
+from reliability_v11 import install as _install_reliability_v11
+_install_reliability_v11(globals(), db)
+
+from arabic_pages import install as _install_arabic_pages
+_install_arabic_pages(globals(),db)
+
+from lecture_delivery_v11 import install as _install_lecture_delivery_v11
+_install_lecture_delivery_v11(globals(),db)
+
+
+
+
+async def ignore_senderless_message(update, context):
+    """Channel posts and service updates have no student identity."""
+    if not update.effective_user:
+        raise ApplicationHandlerStop
+
+
+
+async def submission_topics_check_command(update, context):
+    """Admin-only, read-only checks for both submission destinations."""
+    if not is_admin(update.effective_user.id):
+        return
+    from student_submission_topics import check_destination
+    exam_ok, exam_note = await check_destination(context.bot, EXAM_SUBMISSIONS_CHAT_ID)
+    hw_ok, hw_note = await check_destination(context.bot, HOMEWORK_SUBMISSIONS_CHAT_ID)
+    lines = [
+        '🧵 فحص توبكات تسليم الحلول',
+        f"📝 الامتحانات: {'✅' if exam_ok else '❌'} {exam_note}",
+        f"📚 الواجبات: {'✅' if hw_ok else '❌'} {hw_note}",
+        '',
+        'إذا ظهر ❌ صحّح الآيدي أو فعّل Topics أو أعطِ البوت صلاحية إدارة المواضيع.',
+        'بعد التصحيح يعيد البوت إرسال الحلول المعلقة تلقائياً إلى توبك كل طالب.',
+        'هذا الفحص لا يرسل حلولاً ولا ينشئ توبكات تجريبية.',
+    ]
+    await update.effective_message.reply_text('\n'.join(lines))
+
+
+from homework_v14 import install as _install_homework_v14
+_install_homework_v14(globals(),db)
+from student_sections import install as _install_student_sections
+_install_student_sections(globals(),db,'arabic')
+from submission_uploads import install as _install_submission_uploads
+_install_submission_uploads(globals(),db,'arabic')
+from course_catchup import install as _install_course_catchup
+_install_course_catchup(globals(),db,'arabic')
+from champion_awards import install as _install_champion_awards
+_install_champion_awards(globals(),db,'arabic')
+from coursework_navigation import install as _install_coursework_navigation
+_install_coursework_navigation(globals(),db,'arabic')
 if __name__ == "__main__":
     main()

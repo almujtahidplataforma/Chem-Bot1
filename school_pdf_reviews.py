@@ -39,7 +39,7 @@ def validate_window(start, end, now):
 
 
 def install(ns, db, prefix):
-    if prefix not in {'chemistry', 'english', 'mathematics', 'physics', 'biology', 'french', 'islamic'}:
+    if prefix not in {'chemistry','english','mathematics','physics','biology','french','arabic'}:
         raise ValueError('Unknown subject')
     B, K = ns['InlineKeyboardButton'], ns['InlineKeyboardMarkup']
     zone = ns['TIMEZONE']
@@ -495,7 +495,6 @@ def install(ns, db, prefix):
         kb=K([[B('➕ نشر PDF + امتحان 48 ساعة',callback_data='pdf|new')],
               [B(f'📄 ملفات PDF ({n})',callback_data='pdf|list|0')],
               [B('👥 تفعيل الطلاب المحددين',callback_data='v54_school_students|0')],
-              [B('🗓 أسابيع المراجعة التقليدية',callback_data='v54_school_catalog')],
               [ns['back_menu']()]])
         await query.edit_message_text('🏫 إدارة مراجعة المدرسة\n\n'
             '📄 أي PDF تنشره من هنا يصبح امتحاناً لمدة 48 ساعة من وقت النشر.\n'

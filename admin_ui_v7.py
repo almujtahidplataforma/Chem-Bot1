@@ -12,11 +12,11 @@ LOG = logging.getLogger(__name__)
 
 
 def install(ns, db, subject):
-    if subject not in {'chemistry', 'english'}:
+    if subject not in {'arabic', 'english'}:
         raise ValueError('Unsupported bot')
     B, K = ns['InlineKeyboardButton'], ns['InlineKeyboardMarkup']
     is_admin = ns['is_admin']
-    label = 'الكيمياء' if subject == 'chemistry' else 'الإنكليزي'
+    label = 'اللغة العربية' if subject == 'arabic' else 'الإنكليزي'
 
     def kb(rows):
         return K(rows)
@@ -54,8 +54,8 @@ def install(ns, db, subject):
 
     def students():
         return [
-            [b('👥 قائمة الطلاب', 'admin_students'), b('🆕 طلبات Start', 'chem6|leads|0')],
-            [b('🎯 صلاحيات طالب / وضع مستمع', 'chem6|choose')],
+            [b('👥 قائمة الطلاب', 'admin_students'), b('🆕 طلبات Start', 'ar6|leads|0')],
+            [b('🎯 صلاحيات طالب / وضع مستمع', 'ar6|choose')],
         ]
 
     def exams():
@@ -65,7 +65,7 @@ def install(ns, db, subject):
             [b('🏆 امتحان تراكمي', 'v53_course_cumulative_start')],
             [b('📅 الامتحانات الأسبوعية', 'edu_weeks')],
             [b('🗑 حذف امتحان نهائياً', 'admin_exam_delete_menu')],
-            [b('🔗 ربط الامتحان بالتحضير', 'chem6|linkpreps|0')],
+            [b('🔗 ربط الامتحان بالتحضير', 'ar6|linkpreps|0')],
             [b('🗓 المنشورات المجدولة', 'scheduled_list')],
         ]
 
@@ -73,7 +73,7 @@ def install(ns, db, subject):
         return [
             [b('🏫 إدارة مراجعة المدرسة', 'v54_school_admin')],
             [b('📄 ملفات PDF وامتحاناتها', 'pdf|list|0')],
-            [b('📌 تحديد توبك المراجعة', 'chem6|topic')],
+            [b('📌 تحديد توبك المراجعة', 'ar6|topic')],
         ]
 
     def settings():
@@ -184,10 +184,12 @@ def install(ns, db, subject):
     db.register_student = register_student
     ns['register_student'] = register_student
 
-    # Student /start notices are now handled only by start_role_routing.py,
-    # and are delivered exclusively to the activation group. No private alerts.
+    # /start notifications for registered students (new leads are notified by
+    # the precision-v6 start handler, which uses the reserved code above).
     old_start = ns['start']
     async def start(update, context):
+        # Activation notifications are owned by start_role_routing and go only
+        # to ACTIVATION_GROUP_ID. The student panel shows the parent code.
         return await old_start(update, context)
     ns['start'] = start
 
@@ -195,17 +197,17 @@ def install(ns, db, subject):
     async def button(update, context):
         q = update.callback_query
         data = str(q.data or '')
-        if is_admin(q.from_user.id) and (data in ('menu', 'chem6|hub', 'v7|home') or data.startswith('v7|')):
+        if is_admin(q.from_user.id) and (data in ('menu', 'ar6|hub', 'v7|home') or data.startswith('v7|')):
             # Leaving a real/read-only student session must not carry its
             # identity or pending text edit into a new administrator action.
             for key in ('control_session', 'control_input', 'control_rebuild',
-                        'preview_student', 'chem6_input', 'hw_edit', 'resource_publish_draft'):
+                        'preview_student', 'ar6_input', 'hw_edit', 'resource_publish_draft'):
                 context.user_data.pop(key, None)
         if is_quick(data):
             context.user_data.pop('v48_quick_add', None)
             await q.answer('تم إيقاف نظام أسئلة المراجعة القديم.', show_alert=True)
             return
-        if data in ('chem6|hub', 'v7|home'):
+        if data in ('ar6|hub', 'v7|home'):
             if not is_admin(q.from_user.id):
                 await q.answer('للإدارة فقط.', show_alert=True)
                 return

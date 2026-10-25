@@ -10,9 +10,9 @@ PROFILE_FIELDS = (
     'admin_manual_active','admin_blocked','admin_access_previous_approval',
 )
 ORPHAN_TABLES = (
-    ('chemistry_notifications','user_id'),('chemistry_question_attempts','user_id'),
-    ('chemistry_student_risk','user_id'),('chemistry_observed_members','user_id'),
-    ('chemistry_student_topics','user_id'),('chemistry_communication_routes','student_id'),
+    ('arabic_notifications','user_id'),('arabic_question_attempts','user_id'),
+    ('arabic_student_risk','user_id'),('arabic_observed_members','user_id'),
+    ('arabic_student_topics','user_id'),('arabic_communication_routes','student_id'),
 )
 
 async def erase_student(db, uid, preserve_profile=False):
@@ -23,26 +23,26 @@ async def erase_student(db, uid, preserve_profile=False):
     def op():
         with db.connect() as conn, conn.cursor() as cur:
             cur.execute('SELECT pg_advisory_xact_lock(%s);',(int(uid),))
-            cur.execute('SELECT * FROM chemistry_students WHERE user_id=%s FOR UPDATE;',(int(uid),))
+            cur.execute('SELECT * FROM arabic_students WHERE user_id=%s FOR UPDATE;',(int(uid),))
             old=cur.fetchone()
             if not old:return False
             parents=[]
             if preserve_profile:
-                cur.execute('SELECT * FROM chemistry_parent_links WHERE student_id=%s;',(int(uid),))
+                cur.execute('SELECT * FROM arabic_parent_links WHERE student_id=%s;',(int(uid),))
                 parents=cur.fetchall()
             for table,column in ORPHAN_TABLES:
                 cur.execute(sql.SQL('DELETE FROM {} WHERE {}=%s').format(sql.Identifier(table),sql.Identifier(column)),(int(uid),))
-            cur.execute('DELETE FROM chemistry_scheduled_tasks WHERE linked_student_id=%s;',(int(uid),))
-            cur.execute('DELETE FROM chemistry_tasks WHERE target_scope=%s;',(f'student:{int(uid)}',))
-            cur.execute('DELETE FROM chemistry_students WHERE user_id=%s;',(int(uid),))
+            cur.execute('DELETE FROM arabic_scheduled_tasks WHERE linked_student_id=%s;',(int(uid),))
+            cur.execute('DELETE FROM arabic_tasks WHERE target_scope=%s;',(f'student:{int(uid)}',))
+            cur.execute('DELETE FROM arabic_students WHERE user_id=%s;',(int(uid),))
             if preserve_profile:
                 profile={key:old[key] for key in PROFILE_FIELDS if key in old}
                 profile.update(reset_pending=True,restore_approval=bool(old.get('approved')))
-                cur.execute(sql.SQL('INSERT INTO chemistry_students ({}) VALUES ({})').format(
+                cur.execute(sql.SQL('INSERT INTO arabic_students ({}) VALUES ({})').format(
                     sql.SQL(',').join(map(sql.Identifier,profile)),
                     sql.SQL(',').join(sql.Placeholder() for _ in profile)),tuple(profile.values()))
                 if parents:
-                    cur.execute('INSERT INTO chemistry_parent_links SELECT * FROM json_populate_recordset(NULL::chemistry_parent_links,%s);',
+                    cur.execute('INSERT INTO arabic_parent_links SELECT * FROM json_populate_recordset(NULL::arabic_parent_links,%s);',
                         (Json(parents,dumps=lambda x:json.dumps(x,default=str)),))
             conn.commit();return True
     return await db.run(op)
@@ -50,7 +50,7 @@ async def erase_student(db, uid, preserve_profile=False):
 async def claim_activation(db,uid):
     def op():
         with db.connect() as conn,conn.cursor() as cur:
-            cur.execute('''UPDATE chemistry_students SET activation_requested_at=CURRENT_TIMESTAMP
+            cur.execute('''UPDATE arabic_students SET activation_requested_at=CURRENT_TIMESTAMP
                 WHERE user_id=%s AND approved=FALSE AND admin_blocked=FALSE
                 AND (activation_requested_at IS NULL OR activation_requested_at<CURRENT_TIMESTAMP-INTERVAL '5 minutes')
                 RETURNING user_id;''',(int(uid),))
@@ -60,7 +60,7 @@ async def claim_activation(db,uid):
 async def release_activation(db,uid):
     def op():
         with db.connect() as conn,conn.cursor() as cur:
-            cur.execute('UPDATE chemistry_students SET activation_requested_at=NULL WHERE user_id=%s AND approved=FALSE;',(int(uid),));conn.commit()
+            cur.execute('UPDATE arabic_students SET activation_requested_at=NULL WHERE user_id=%s AND approved=FALSE;',(int(uid),));conn.commit()
     await db.run(op)
 
 def activation_destinations(ns):
@@ -103,7 +103,7 @@ def install(ns,db):
             rows.insert(0,[B('📋 نسخ كود ولي الأمر',copy_text=ns['CopyTextButton'](f"/parent {student['parent_link_code']}"),style='primary')])
         return K(rows)
 
-    async def send_activation(bot,student):
+    async def send_activation(bot,student,notify_student=True):
         uid=int(student['user_id'])
         if not await claim_activation(db,uid):return {'status':'cooldown','sent':0}
         buttons=K([[B('✅ قبول وتفعيل',callback_data=f'approve|{uid}',style='success'),
@@ -120,7 +120,8 @@ def install(ns,db):
         sent=sum(await asyncio.gather(*(deliver(chat) for chat in destinations)))
         if not sent:await release_activation(db,uid)
         try:
-            await bot.send_message(uid,('⏳ تم إرسال طلب تفعيلك إلى مجموعة التفعيل. يمكنك إعادة إرساله من الزر أدناه.' if sent else '⚠️ تعذر إيصال طلبك إلى مجموعة التفعيل. أخبر الإدارة أو حاول مجدداً.'),reply_markup=pending_menu(student))
+            if notify_student:
+                await bot.send_message(uid,('⏳ تم إرسال طلب تفعيلك إلى مجموعة التفعيل. يمكنك إعادة إرساله من الزر أدناه.' if sent else '⚠️ تعذر إيصال طلبك إلى مجموعة التفعيل. أخبر الإدارة أو حاول مجدداً.'),reply_markup=pending_menu(student))
         except ns['TelegramError']:
             ns['logger'].warning('Student activation status notice failed for %s',uid)
         return {'status':'sent' if sent else 'failed','sent':sent,'total':len(destinations)}
@@ -147,12 +148,12 @@ def install(ns,db):
     async def schedule(q,context):
         student=await db.get_student(q.from_user.id)
         if not student or not student.get('approved') or student.get('study_track')!='chapter':
-            await q.edit_message_text('تعديل الأيام لطلاب الدراسة حسب الفصول. للدورة جدول الأستاذ.',reply_markup=K([[ns['back_menu']()]]));return
-        days=context.user_data.setdefault('flex_days',list(student.get('study_days') or [6,1,3]))
+            await q.edit_message_text('تعديل الأيام لطلاب الدراسة حسب الفصلات. للدورة جدول الأستاذ.',reply_markup=K([[ns['back_menu']()]]));return
+        days=context.user_data.setdefault('flex_days',list(student.get('study_days') or [0,2,4]))
         names=['الاثنين','الثلاثاء','الأربعاء','الخميس','الجمعة','السبت','الأحد']
         rows=[[B(('✅ ' if i in days else '▫️ ')+name,callback_data=f'flex_day|{i}',style='success' if i in days else 'primary')] for i,name in enumerate(names)]
         rows.extend([[B('💾 حفظ الجدول',callback_data='flex_save',style='success')],[ns['back_menu']()]])
-        await q.edit_message_text(f'🗓 اختر أيام دراستك بحرية (من يوم إلى 7 أيام).\nعدد الأيام المحددة: {len(days)}\nيعاد توزيع المحاضرات غير المكتملة وتحديث موعد إكمال المنهج.',reply_markup=K(rows))
+        await q.edit_message_text(f'🗓 اختر أيام دراستك بحرية (من يوم إلى 7 أيام).\nعدد الأيام المحددة: {len(days)}\nيعاد توزيع المحاضرات غير المكتملة وتحديث موعد إكمال الخطة الحالية.',reply_markup=K(rows))
 
     async def preview_home(q,uid):
         student=await db.get_student(uid)
@@ -273,7 +274,7 @@ def install(ns,db):
             except ValueError:await q.answer('يوم غير صالح.');return
             if not 0<=day<=6:await q.answer('يوم غير صالح.');return
             student=await db.get_student(uid)
-            days=context.user_data.setdefault('flex_days',list((student or {}).get('study_days') or [6,1,3]))
+            days=context.user_data.setdefault('flex_days',list((student or {}).get('study_days') or [0,2,4]))
             if day in days:days.remove(day)
             else:days.append(day)
             await q.answer();await schedule(q,context);return
@@ -284,7 +285,7 @@ def install(ns,db):
             if result.get('status')!='ok':await q.answer('تعذر حفظ الجدول؛ راجع مسارك.',show_alert=True);return
             clear_cache(uid);await q.answer()
             plan=await db.v37_chapter_completion_plan(uid);finish=plan.get('full_finish')
-            await q.edit_message_text(f"✅ تم تحديث جدولك والمحاضرات المستقبلية.\nموعد إكمال المنهج: {finish or 'أكملت المحاضرات المتاحة'}",reply_markup=K([[B('🗓 تعديل الجدول',callback_data='personal_schedule',style='primary')],[ns['back_menu']()]]));return
+            await q.edit_message_text(f"✅ تم تحديث جدولك والمحاضرات المستقبلية.\nموعد إكمال الخطة الحالية: {finish or 'أكملت المحاضرات المتاحة'}",reply_markup=K([[B('🗓 تعديل الجدول',callback_data='personal_schedule',style='primary')],[ns['back_menu']()]]));return
 
         if data=='change_study_track' or data.startswith(('v41_track_confirm|','v47_change_confirm|')):
             if admin:return await previous_button(update,context)
@@ -298,3 +299,28 @@ def install(ns,db):
             await q.edit_message_text('✅ حُذف سجل الدراسة السابق، وبقيت معلوماتك الأساسية وولي الأمر. اختر مسارك:',reply_markup=ns['onboarding_track_keyboard']());return
         return await previous_button(update,context)
     ns['button_handler']=button
+
+
+    async def recover_activation_requests(context):
+        # Old releases saved registrations without ever sending an actionable request.
+        if not activation_destinations(ns):
+            return
+        def pending():
+            with db.connect() as conn,conn.cursor() as cur:
+                cur.execute("""SELECT * FROM arabic_students WHERE approved=FALSE
+                    AND admin_blocked=FALSE AND reset_pending=FALSE
+                    AND activation_requested_at IS NULL
+                    AND full_name IS NOT NULL AND school IS NOT NULL
+                    ORDER BY user_id LIMIT 25;""")
+                return cur.fetchall()
+        for student in await db.run(pending):
+            try:
+                await send_activation(context.bot,student,notify_student=False)
+            except Exception:
+                ns['logger'].exception('Activation recovery failed for %s',student['user_id'])
+    ns['recover_activation_requests']=recover_activation_requests
+    previous_post=ns['post_init']
+    async def post_init(app):
+        await previous_post(app)
+        app.job_queue.run_repeating(recover_activation_requests,60,first=15,name='activation_request_recovery')
+    ns['post_init']=post_init

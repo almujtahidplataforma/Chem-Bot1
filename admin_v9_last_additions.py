@@ -31,11 +31,11 @@ def parse_hours(value):
 
 
 def install(ns, db, subject):
-    if subject not in ('chemistry', 'english'):
+    if subject not in ('arabic', 'english'):
         raise ValueError('Unsupported subject')
     B, K = ns['InlineKeyboardButton'], ns['InlineKeyboardMarkup']
     admin = ns['is_admin']
-    label = 'الكيمياء' if subject == 'chemistry' else 'الإنكليزي'
+    label = 'اللغة العربية' if subject == 'arabic' else 'الإنكليزي'
     T = subject
     TelegramError = ns['TelegramError']
 
@@ -56,8 +56,6 @@ def install(ns, db, subject):
                 PRIMARY KEY(task_id,user_id));
                 CREATE INDEX IF NOT EXISTS {T}_v9_deleted_warning_user_idx
                 ON {T}_v9_deleted_task_warnings(user_id);
-                -- Backfill explicit removals from older releases, not automatic
-                -- retractions caused by deadline extensions.
                 INSERT INTO {T}_v9_deleted_task_warnings(task_id,user_id,deleted_by)
                 SELECT t.id,s.user_id,a.actor_id
                 FROM {T}_audit a
@@ -67,11 +65,19 @@ def install(ns, db, subject):
                 ON CONFLICT(task_id,user_id) DO NOTHING;''')
             conn.commit()
 
+    # Run schema migration during init_db, before earlier startup repair jobs
+    # can call warning functions that query the tombstone table.
+    previous_init = ns['init_db']
+    def init_db():
+        previous_init()
+        migrate()
+    ns['init_db'] = init_db
+    db.init_db = init_db
+
     previous_post = ns['post_init']
 
     async def post_init(app):
         await previous_post(app)
-        await db.run(migrate)
         LOG.info('V9 %s warning tombstones and activation controls ready', T)
 
     ns['post_init'] = post_init

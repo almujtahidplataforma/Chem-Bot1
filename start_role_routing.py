@@ -14,7 +14,7 @@ LOG = logging.getLogger(__name__)
 
 
 def install(ns, db, subject):
-    if subject not in {'biology', 'english', 'chemistry', 'mathematics', 'physics', 'french', 'islamic'}:
+    if subject not in {'biology', 'english', 'chemistry', 'mathematics', 'physics', 'french', 'arabic'}:
         raise ValueError('Unknown bot subject')
     B = ns['InlineKeyboardButton']
     K = ns['InlineKeyboardMarkup']
@@ -24,7 +24,7 @@ def install(ns, db, subject):
     old_button = ns['button_handler']
     label = {'biology':'الأحياء', 'english':'الإنكليزي', 'chemistry':'الكيمياء',
              'mathematics':'الرياضيات', 'physics':'الفيزياء',
-             'french':'الفرنسية', 'islamic':'التربية الإسلامية'}[subject]
+             'french':'الفرنسية', 'arabic':'اللغة العربية'}[subject]
     table = f'{subject}_start_role_notifications'
 
     def migrate():
@@ -112,9 +112,14 @@ def install(ns, db, subject):
         if not user or is_admin(user.id):
             return await old_start(update, context)
         student = await db.get_student(user.id)
-        if await linked_parent(user.id):
+        if (await linked_parent(user.id) or
+            (student and student.get('status') == 'parent_account')):
             context.user_data.pop('start_role', None)
             return await old_start(update, context)
+        if context.user_data.get('start_role') == 'parent':
+            await update.effective_message.reply_text(
+                '👨‍👩‍👦 هذا حساب ولي أمر. لربطه أرسل /parent متبوعاً بكود الطالب.')
+            return END
         if not student and context.user_data.get('start_role') != 'student':
             # Unknown people cannot be distinguished as parents or students by
             # Telegram. Ask once; never label them students on /start alone.
@@ -125,7 +130,13 @@ def install(ns, db, subject):
                     [B('👨‍👩‍👦 أنا ولي أمر', callback_data='start_role|parent')],
                 ]))
             return END
-        if not student or (not student.get('approved') and not student.get('reset_pending')):
+        if student and not student.get('approved') and not student.get('admin_blocked'):
+            sender = ns.get('send_activation_request')
+            if sender:
+                await sender(context.bot, student)
+            else:
+                await notify_student(update, context, student)
+        elif not student:
             await notify_student(update, context, student)
         return await old_start(update, context)
 

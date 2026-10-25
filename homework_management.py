@@ -5,7 +5,7 @@ import secrets
 ZONE=ZoneInfo('Asia/Baghdad')
 
 def install(ns,db,prefix):
-    if prefix not in {'chemistry','english','mathematics','physics','biology','french','islamic'}:raise ValueError('Invalid subject')
+    if prefix not in {'chemistry','english','mathematics','physics','biology','french','arabic'}:raise ValueError('Invalid subject')
     p=prefix;B=ns['InlineKeyboardButton'];K=ns['InlineKeyboardMarkup']
     async def sql(query,args=(),one=False,write=False):
         def op():
@@ -77,15 +77,16 @@ def install(ns,db,prefix):
 
     # Manual early closing must not create a delayed homework warning in the
     # recovery worker; an ordinary expired deadline still does.
-    old_missing = db.missing_students
+    old_missing = getattr(db, 'missing_students', None)
     async def missing_students(tid):
         t = await task(tid)
         if t and (t.get('homework_manual_closed') or t.get('retired_obligation') or
                   (t.get('homework_opens_at') and t['homework_opens_at'] > datetime.now(ZONE))):
             return []
         return await old_missing(tid)
-    db.missing_students = missing_students
-    ns['missing_students'] = missing_students
+    if old_missing is not None:
+        db.missing_students = missing_students
+        ns['missing_students'] = missing_students
     ns['_homework_clear_extended_warnings'] = clear_extended_warnings
 
     async def bonus(tid,uid,value,actor):

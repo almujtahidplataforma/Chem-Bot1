@@ -3,21 +3,21 @@ async def change_access(db,user_id,action,actor):
  if action not in {'activate','block','unblock'}:raise ValueError('Invalid action')
  def op():
   with db.connect() as conn,conn.cursor() as cur:
-   cur.execute('SELECT * FROM chemistry_students WHERE user_id=%s FOR UPDATE;',(int(user_id),));student=cur.fetchone()
+   cur.execute('SELECT * FROM arabic_students WHERE user_id=%s FOR UPDATE;',(int(user_id),));student=cur.fetchone()
    if not student:return None
    if action=='activate':
-    cur.execute('''UPDATE chemistry_students SET approved=TRUE,admin_manual_active=TRUE,
+    cur.execute('''UPDATE arabic_students SET approved=TRUE,admin_manual_active=TRUE,
       admin_blocked=FALSE,admin_access_previous_approval=TRUE WHERE user_id=%s RETURNING *;''',(int(user_id),))
    elif action=='block':
-    cur.execute('''UPDATE chemistry_students SET admin_access_previous_approval=
+    cur.execute('''UPDATE arabic_students SET admin_access_previous_approval=
       CASE WHEN admin_blocked THEN admin_access_previous_approval ELSE approved END,
       admin_blocked=TRUE,approved=FALSE WHERE user_id=%s RETURNING *;''',(int(user_id),))
    else:
-    cur.execute('''UPDATE chemistry_students SET approved=
+    cur.execute('''UPDATE arabic_students SET approved=
       CASE WHEN admin_blocked THEN admin_access_previous_approval ELSE approved END,
       admin_blocked=FALSE WHERE user_id=%s RETURNING *;''',(int(user_id),))
    result=cur.fetchone()
-   cur.execute("INSERT INTO chemistry_audit(actor_id,action,details) VALUES(%s,%s,%s);",(int(actor),'admin_student_'+action,f'user_id={int(user_id)}'))
+   cur.execute("INSERT INTO arabic_audit(actor_id,action,details) VALUES(%s,%s,%s);",(int(actor),'admin_student_'+action,f'user_id={int(user_id)}'))
    conn.commit();return result
  return await db.run(op)
 
@@ -25,7 +25,7 @@ def install(ns,db):
  B=ns['InlineKeyboardButton'];K=ns['InlineKeyboardMarkup'];END=ns['ConversationHandler'].END
  def migrate():
   with db.connect() as conn,conn.cursor() as cur:
-   cur.execute('''ALTER TABLE chemistry_students
+   cur.execute('''ALTER TABLE arabic_students
      ADD COLUMN IF NOT EXISTS admin_manual_active BOOLEAN NOT NULL DEFAULT FALSE,
      ADD COLUMN IF NOT EXISTS admin_blocked BOOLEAN NOT NULL DEFAULT FALSE,
      ADD COLUMN IF NOT EXISTS admin_access_previous_approval BOOLEAN NOT NULL DEFAULT FALSE;''');conn.commit()

@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: almujtahid-chemistry-bot
+    name: almujtahid-arabic-bot
     runtime: docker
     healthCheckPath: /
     autoDeploy: true
@@ -19,7 +19,7 @@ services:
         sync: false
       - key: OWNER_USERNAME
         sync: false
-      - key: CHEMISTRY_GROUP_ID
+      - key: ARABIC_GROUP_ID
         sync: false
       - key: ACTIVATION_GROUP_ID
         sync: false
@@ -28,6 +28,8 @@ services:
       - key: HOMEWORK_TOPIC_ID
         sync: false
       - key: EXAM_TOPIC_ID
+        sync: false
+      - key: SCHOOL_REVIEW_TOPIC_ID
         sync: false
       - key: WARNINGS_TOPIC_ID
         sync: false
@@ -66,13 +68,13 @@ services:
       - key: USE_DATABASE_INSTANCE_LOCK
         value: "0"
       - key: DEFAULT_HOMEWORK_HOURS
-        value: "24"
+        value: "48"
       - key: MIN_LECTURE_WATCH_MINUTES
         value: "30"
       - key: ACTIVATION_GRACE_HOURS
         value: "24"
       - key: EXAM_ENFORCEMENT_START_DATE_V46
-        value: "2026-09-07"
+        value: "2026-10-19"
       - key: LATE_EXAM_XP_COST
         value: "150"
       - key: SUBMISSION_RETRY_SECONDS
